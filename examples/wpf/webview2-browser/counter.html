@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Counter</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+    <h1>Counter App</h1>
+    <p id="display">Clicks: 0</p>
+    <button id="btn">Click to Add</button>
+
+    <script>
+        let clickCount = 0;
+        const display = document.getElementById('display');
+        const button = document.getElementById('btn');
+
+        button.addEventListener('click', function() {
+            clickCount++;
+            const message = 'Button clicked ' + clickCount + ' times';
+            display.textContent = message;
+            
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage(message);
+            } else {
+                alert('chrome.webview not available! Click: ' + message);
+            }
+        });
+    </script>
+</body>
+</html>

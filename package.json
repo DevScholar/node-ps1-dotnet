@@ -1,0 +1,19 @@
+{
+  "name": "node-ps1-dotnet",
+  "version": "0.0.0",
+  "description": "Node.js to .NET interop via IPC",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node start.js examples/winforms/counter/counter.ts",
+    "build": "tsc"
+  },
+  "keywords": ["dotnet", "winforms", "interop", "bridge", "ipc"],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3"
+  }
+}

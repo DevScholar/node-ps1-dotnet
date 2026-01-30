@@ -1,0 +1,4 @@
+node_modules
+dist
+.github
+examples/wpf/webview2-browser/WebView2_Data
