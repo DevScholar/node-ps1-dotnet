@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as cp from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getPowerShellPath } from './utils.ts';
+import { IpcSync, readLineSync } from './ipc.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,108 +16,9 @@ const gcRegistry = new FinalizationRegistry((id: string) => {
 const callbackRegistry = new Map<string, Function>();
 const typeMetadataCache = new Map<string, Map<string, string>>();
 
-let ipc: any = null;
+let ipc: IpcSync | null = null;
 let proc: cp.ChildProcess | null = null;
 let initialized = false;
-
-function readLineSync(fd: number): string | null {
-    const chunks: Buffer[] = [];
-    let totalLength = 0;
-    const buf = Buffer.alloc(1);
-    while (true) {
-        try {
-            const r = fs.readSync(fd, buf, 0, 1, null);
-            if (r === 0) {
-                if (chunks.length === 0) return null;
-                break;
-            }
-            if (buf[0] === 10) break;
-            const chunk = Buffer.alloc(1);
-            buf.copy(chunk);
-            chunks.push(chunk);
-            totalLength += 1;
-        } catch (e) {
-            return null;
-        }
-    }
-    if (chunks.length === 0) return '';
-    const completeBuffer = Buffer.concat(chunks, totalLength);
-    return completeBuffer.toString('utf8');
-}
-
-class IpcSync {
-    public fd: number = 0;
-    private exited: boolean = false;
-
-    constructor(
-        private pipeName: string,
-        private onEvent: (msg: any) => any 
-    ) {}
-
-    connect() {
-        const pipePath = `\\\\.\\pipe\\${this.pipeName}`;
-        const start = Date.now();
-        while (true) {
-            try {
-                this.fd = fs.openSync(pipePath, 'r+');
-                break;
-            } catch (e: any) {
-                if (Date.now() - start > 5000) throw new Error(`Timeout connecting pipe: ${pipePath}`);
-                const s = Date.now() + 50;
-                while (Date.now() < s);
-            }
-        }
-    }
-
-    send(cmd: any): any {
-        if (this.exited) {
-            return { type: 'exit', message: '' };
-        }
-
-        try {
-            fs.writeSync(this.fd, JSON.stringify(cmd) + '\n');
-        } catch (e) {
-            throw new Error("Pipe closed (Write failed)");
-        }
-
-        while (true) {
-            const line = readLineSync(this.fd);
-            if (line === null) throw new Error("Pipe closed (Read EOF)");
-            if (!line.trim()) continue;
-
-            let res: any;
-            try {
-                res = JSON.parse(line);
-            } catch (e) {
-                throw new Error(`Pipe closed (Invalid JSON): ${line}`);
-            }
-
-            if (res.type === 'event') {
-                let result = null;
-                try {
-                    result = this.onEvent(res);
-                } catch (e) {
-                    console.error("Callback Error:", e);
-                }
-                
-                const reply = { type: 'reply', result: result };
-                try {
-                    fs.writeSync(this.fd, JSON.stringify(reply) + '\n');
-                } catch {}
-                continue;
-            }
-
-            if (res.type === 'error') throw new Error(`Host Error: ${res.message}`);
-            
-            if (res.type === 'exit') {
-                this.exited = true;
-                return res;
-            }
-            
-            return res;
-        }
-    }
-}
 
 function initialize() {
     if (initialized) return;
@@ -185,7 +87,7 @@ function createProxyWithInlineProps(meta: any): any {
                 return (callback: Function) => {
                     const cbId = `cb_${Date.now()}_${Math.random()}`;
                     callbackRegistry.set(cbId, callback);
-                    ipc.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
+                    ipc!.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
                 };
             }
 
@@ -193,7 +95,7 @@ function createProxyWithInlineProps(meta: any): any {
 
             if (!memType) {
                 try {
-                    const inspectRes = ipc.send({ action: 'Inspect', targetId: id, memberName: prop });
+                    const inspectRes = ipc!.send({ action: 'Inspect', targetId: id, memberName: prop });
                     memType = inspectRes.memberType;
                     memberCache.set(prop, memType!);
                 } catch (e) {
@@ -202,7 +104,7 @@ function createProxyWithInlineProps(meta: any): any {
             }
 
             if (memType === 'property') {
-                const res = ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: [] });
+                const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [] });
                 return createProxy(res);
             } else {
                 return (...args: any[]) => {
@@ -215,7 +117,7 @@ function createProxyWithInlineProps(meta: any): any {
                         }
                         return a;
                     });
-                    const res = ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: netArgs });
+                    const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: netArgs });
                     return createProxy(res);
                 };
             }
@@ -224,7 +126,7 @@ function createProxyWithInlineProps(meta: any): any {
         set: (target: any, prop: string, value: any) => {
             if (typeof prop !== 'string') return false;
             const netArg = (value && value.__ref) ? { __ref: value.__ref } : value;
-            ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: [netArg] });
+            ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [netArg] });
             memberCache.set(prop, 'property');
             return true;
         },
@@ -239,7 +141,7 @@ function createProxyWithInlineProps(meta: any): any {
                 }
                 return a;
             });
-            const res = ipc.send({ action: 'New', typeId: id, args: netArgs });
+            const res = ipc!.send({ action: 'New', typeId: id, args: netArgs });
             return createProxy(res);
         },
 
@@ -261,12 +163,12 @@ function createProxy(meta: any): any {
         const taskId = meta.id;
         return new Promise((resolve, reject) => {
             try {
-                const res = ipc.send({ action: 'AwaitTask', taskId: taskId });
+                const res = ipc!.send({ action: 'AwaitTask', taskId: taskId });
                 resolve(createProxy(res));
             } catch (e) {
                 reject(e);
             } finally {
-                try { ipc.send({ action: 'Release', targetId: taskId }); } catch {}
+                try { ipc!.send({ action: 'Release', targetId: taskId }); } catch {}
             }
         });
     }
@@ -302,7 +204,7 @@ function createProxy(meta: any): any {
                 return (callback: Function) => {
                     const cbId = `cb_${Date.now()}_${Math.random()}`;
                     callbackRegistry.set(cbId, callback);
-                    ipc.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
+                    ipc!.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
                 };
             }
 
@@ -310,7 +212,7 @@ function createProxy(meta: any): any {
 
             if (!memType) {
                 try {
-                    const inspectRes = ipc.send({ action: 'Inspect', targetId: id, memberName: prop });
+                    const inspectRes = ipc!.send({ action: 'Inspect', targetId: id, memberName: prop });
                     memType = inspectRes.memberType;
                     memberCache.set(prop, memType!);
                 } catch (e) {
@@ -319,7 +221,7 @@ function createProxy(meta: any): any {
             }
 
             if (memType === 'property') {
-                const res = ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: [] });
+                const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [] });
                 return createProxy(res);
             } else {
                 return (...args: any[]) => {
@@ -332,7 +234,7 @@ function createProxy(meta: any): any {
                         }
                         return a;
                     });
-                    const res = ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: netArgs });
+                    const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: netArgs });
                     return createProxy(res);
                 };
             }
@@ -341,7 +243,7 @@ function createProxy(meta: any): any {
         set: (target: any, prop: string, value: any) => {
             if (typeof prop !== 'string') return false;
             const netArg = (value && value.__ref) ? { __ref: value.__ref } : value;
-            ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: [netArg] });
+            ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [netArg] });
             memberCache.set(prop, 'property');
             return true;
         },
@@ -356,7 +258,7 @@ function createProxy(meta: any): any {
                 }
                 return a;
             });
-            const res = ipc.send({ action: 'New', typeId: id, args: netArgs });
+            const res = ipc!.send({ action: 'New', typeId: id, args: netArgs });
             return createProxy(res);
         },
 
@@ -370,13 +272,13 @@ function createProxy(meta: any): any {
 export const node_ps1_dotnet = {
     _load(typeName: string): any {
         initialize();
-        const res = ipc.send({ action: 'GetType', typeName });
+        const res = ipc!.send({ action: 'GetType', typeName });
         return createProxy(res);
     },
 
     _release(id: string) {
         if (ipc) {
-            try { ipc.send({ action: 'Release', targetId: id }); } catch {}
+            try { ipc!.send({ action: 'Release', targetId: id }); } catch {}
         }
     },
 
@@ -407,7 +309,7 @@ const dotnetProxy = new Proxy(function() {} as any, {
         if (prop === 'default') return dotnetProxy;
         if (prop === 'then') return undefined;
         if (prop === '__inspect') {
-            return (targetId: string, memberName: string) => ipc.send({ action: 'Inspect', targetId, memberName });
+            return (targetId: string, memberName: string) => ipc!.send({ action: 'Inspect', targetId, memberName });
         }
         return node_ps1_dotnet._load(prop);
     },

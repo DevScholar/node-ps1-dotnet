@@ -1,4 +1,4 @@
-# scripts/PsHost.ps1
+﻿# scripts/PsHost.ps1
 param($PipeName)
 
 $ScriptDir = Split-Path $MyInvocation.MyCommand.Path

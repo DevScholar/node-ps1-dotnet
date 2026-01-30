@@ -4,7 +4,7 @@ import type { ProtocolResponse, CommandRequest } from './types.ts';
 
 declare const Deno: any;
 
-function readLineSync(fd: number): string | null {
+export function readLineSync(fd: number): string | null {
     const chunks: Buffer[] = [];
     let totalLength = 0;
     const isDeno = typeof Deno !== 'undefined';
