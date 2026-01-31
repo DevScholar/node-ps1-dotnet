@@ -24,7 +24,8 @@ function Get-ComObjectProperties {
         $type = $InputObject.GetType()
     }
     
-    if ($type.Namespace -match "Microsoft.Web.WebView2") {
+    if ($type.FullName -eq "System.__ComObject" -or 
+        ($null -ne $type.GetCustomAttributes($false) | Where-Object { $_ -is [System.Runtime.InteropServices.ComVisibleAttribute] })) {
         $props['__comType'] = $type.FullName
         
         $allProps = $type.GetProperties([System.Reflection.BindingFlags]'Public,Instance')

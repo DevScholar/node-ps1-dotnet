@@ -1,4 +1,4 @@
-﻿# scripts/PsBridge/Reflection.ps1
+# scripts/PsBridge/Reflection.ps1
 
 function Invoke-ReflectionLogic {
     param($Cmd)
@@ -63,8 +63,11 @@ function Invoke-ReflectionLogic {
                     $propsToInclude = @{}
                     
                     try {
-                        $typeName = $arg.GetType().FullName
-                        if ($typeName -match "EventArgs$" -or $typeName -match "InitializationCompleted" -or $typeName -match "WebView2") {
+                        $comEventArgs = 
+                            $typeName -match "EventArgs$" -or 
+                            $typeName -match "InitializationCompleted" -or
+                            $arg.GetType().FullName -eq "System.__ComObject"
+                        if ($comEventArgs) {
                             $isEventArgs = $true
                         }
                     }
