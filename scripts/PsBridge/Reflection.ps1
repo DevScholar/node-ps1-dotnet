@@ -16,7 +16,7 @@ function Invoke-ReflectionLogic {
             }
         }
         if ($null -eq $type) { return @{ type = "namespace"; value = $name } }
-        return Convert-ToProtocol $type
+        return ConvertTo-Protocol $type
     }
 
     # --- Inspect ---
@@ -57,7 +57,7 @@ function Invoke-ReflectionLogic {
                     $protoArgs += @{ type = "null" }
                 }
                 else {
-                    $converted = Convert-ToProtocol $arg
+                    $converted = ConvertTo-Protocol $arg
                     
                     $isEventArgs = $false
                     $propsToInclude = @{}
@@ -119,7 +119,7 @@ function Invoke-ReflectionLogic {
         $realArgs = Resolve-Args $Cmd.args
         try { $obj = [Activator]::CreateInstance($type, $realArgs) } 
         catch { throw "New Error: $($_.Exception.Message)" }
-        return Convert-ToProtocol $obj
+        return ConvertTo-Protocol $obj
     }
 
     # --- Invoke ---
@@ -145,13 +145,13 @@ function Invoke-ReflectionLogic {
                 $prop = $targetType.GetProperty($name, [System.Reflection.BindingFlags]'Public,Static')
                 if ($prop) {
                     $result = $prop.GetValue($null)
-                    return Convert-ToProtocol $result
+                    return ConvertTo-Protocol $result
                 }
                 
                 $field = $targetType.GetField($name, [System.Reflection.BindingFlags]'Public,Static')
                 if ($field) {
                     $result = $field.GetValue($null)
-                    return Convert-ToProtocol $result
+                    return ConvertTo-Protocol $result
                 }
             }
             catch { }
@@ -173,7 +173,7 @@ function Invoke-ReflectionLogic {
         if (-not $isStatic -and $realArgs.Count -eq 0) {
             $member = $target.PSObject.Members[$name]
             if ($null -ne $member -and ($member.MemberType -match "Property")) {
-                return Convert-ToProtocol $member.Value 
+                return ConvertTo-Protocol $member.Value 
             }
         }
         
@@ -183,7 +183,7 @@ function Invoke-ReflectionLogic {
                 $prop = $targetType.GetProperty($name, [System.Reflection.BindingFlags]'Public,Instance')
                 if ($prop) {
                     $result = $prop.GetValue($target)
-                    return Convert-ToProtocol $result
+                    return ConvertTo-Protocol $result
                 }
             }
             catch { }
@@ -261,7 +261,7 @@ function Invoke-ReflectionLogic {
                 }
             }
 
-            return Convert-ToProtocol $result
+            return ConvertTo-Protocol $result
 
         } catch {
             if ($realArgs.Count -eq 0) {
@@ -271,7 +271,7 @@ function Invoke-ReflectionLogic {
                     } else {
                         $val = $target.$name
                     }
-                    if ($null -ne $val) { return Convert-ToProtocol $val }
+                    if ($null -ne $val) { return ConvertTo-Protocol $val }
                 } catch {}
             }
             throw "Invoke Error ($name): $($_.Exception.Message)" 
@@ -301,7 +301,7 @@ function Invoke-ReflectionLogic {
             $task.GetAwaiter().GetResult()
             $prop = $task.GetType().GetProperty("Result")
             $res = if ($prop) { $prop.GetValue($task, $null) } else { $null }
-            return Convert-ToProtocol $res
+            return ConvertTo-Protocol $res
         } catch { throw "Task Error: $($_.Exception.Message)" }
     }
 }

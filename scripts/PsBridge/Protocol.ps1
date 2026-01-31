@@ -79,7 +79,7 @@ function Get-ComObjectProperties {
     return $props
  }
 
-function Convert-ToProtocol {
+function ConvertTo-Protocol {
     param($InputObject)
     
     if ($null -eq $InputObject) { return @{ type = "null" } }
@@ -112,7 +112,7 @@ function Convert-ToProtocol {
     if ($InputObject -is [System.Array]) {
         $arrResult = @()
         foreach ($item in $InputObject) {
-            $arrResult += Convert-ToProtocol $item
+            $arrResult += ConvertTo-Protocol $item
         }
         return @{ type = "array"; value = $arrResult }
     }
@@ -150,7 +150,7 @@ function Resolve-Args {
                     foreach ($a in $netCallbackArgs) {
                         # Filter out PowerShell's AutomationNull (null parameter placeholder)
                         if ($null -ne $a -and $a.GetType().Name -ne 'AutomationNull') {
-                            $validProtoArgs += Convert-ToProtocol $a
+                            $validProtoArgs += ConvertTo-Protocol $a
                         }
                     }
 
@@ -187,4 +187,4 @@ function Remove-BridgeObject {
     $Global:BridgeState.ObjectStore.Remove($Id)
 }
 
-Export-ModuleMember -Function Convert-ToProtocol, Resolve-Args, Remove-BridgeObject -Variable BridgeState
+Export-ModuleMember -Function ConvertTo-Protocol, Resolve-Args, Remove-BridgeObject -Variable BridgeState
