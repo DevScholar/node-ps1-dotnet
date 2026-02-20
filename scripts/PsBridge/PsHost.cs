@@ -170,7 +170,18 @@ public static class PsHost
         {
             var result = Reflection.InvokeReflectionLogic(cmd);
             var json = SimpleJson.Serialize(result);
-            BridgeState.Writer.WriteLine(json);
+            try
+            {
+                BridgeState.Writer.WriteLine(json);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+        }
+        catch (IOException)
+        {
+            return false;
         }
         catch (Exception ex)
         {
@@ -180,7 +191,11 @@ public static class PsHost
                 { "type", "error" },
                 { "message", errMsg.Replace("\"", "'") }
             });
-            BridgeState.Writer.WriteLine(errJson);
+            try
+            {
+                BridgeState.Writer.WriteLine(errJson);
+            }
+            catch (IOException) { }
         }
         return false;
     }
@@ -203,9 +218,16 @@ public static class PsHost
 
         while (BridgeState.PipeServer.IsConnected)
         {
-            var line = BridgeState.Reader.ReadLine();
-            if (line == null) break;
-            HandleLine(line);
+            try
+            {
+                var line = BridgeState.Reader.ReadLine();
+                if (line == null) break;
+                HandleLine(line);
+            }
+            catch (IOException)
+            {
+                break;
+            }
         }
     }
 }
