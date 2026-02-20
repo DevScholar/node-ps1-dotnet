@@ -1,5 +1,4 @@
 // scripts/PsBridge/Reflection.cs
-#pragma warning disable 618
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -19,7 +18,6 @@ public static class Reflection
             var type = Type.GetType(name);
             if (type == null)
             {
-                try { Assembly.LoadWithPartialName(name); } catch { }
                 var assemblies = AppDomain.CurrentDomain.GetAssemblies();
                 foreach (var asm in assemblies)
                 {
@@ -593,6 +591,27 @@ public static class Reflection
                 var innerMsg = ae.InnerException != null ? ae.InnerException.Message : ae.ToString();
                 throw new Exception("Task Error: " + innerMsg);
             }
+        }
+        
+        if (action == "LoadAssembly")
+        {
+            var assemblyName = cmd["assemblyName"].ToString();
+            Assembly asm = null;
+            try
+            {
+                asm = Assembly.Load(assemblyName);
+            }
+            catch
+            {
+#pragma warning disable 618
+                try { asm = Assembly.LoadWithPartialName(assemblyName); } catch { }
+#pragma warning restore 618
+            }
+            if (asm == null)
+            {
+                throw new Exception("Failed to load assembly: " + assemblyName);
+            }
+            return Protocol.ConvertToProtocol(asm);
         }
         
         if (action == "Release")

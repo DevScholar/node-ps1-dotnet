@@ -1,6 +1,9 @@
 // examples/winforms/counter/counter.ts
 import dotnet from '../../../src/index.ts';
 
+dotnet.load('System.Windows.Forms');
+dotnet.load('System.Drawing');
+
 const System = dotnet.System as any;
 const Forms = System.Windows.Forms;
 const Drawing = System.Drawing;

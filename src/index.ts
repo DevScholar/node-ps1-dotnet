@@ -328,6 +328,12 @@ export const node_ps1_dotnet = {
 
     _getAssembly(assemblyName: string): any {
         return this._load(assemblyName);
+    },
+
+    _loadAssembly(assemblyName: string): any {
+        initialize();
+        const res = ipc!.send({ action: 'LoadAssembly', assemblyName });
+        return createProxy(res);
     }
 };
 
@@ -345,6 +351,7 @@ const dotnetProxy = new Proxy(function() {} as any, {
     get: (target: any, prop: string) => {
         if (prop === 'default') return dotnetProxy;
         if (prop === 'then') return undefined;
+        if (prop === 'load') return (assemblyName: string) => node_ps1_dotnet._loadAssembly(assemblyName);
         if (prop === '__inspect') {
             return (targetId: string, memberName: string) => ipc!.send({ action: 'Inspect', targetId, memberName });
         }
