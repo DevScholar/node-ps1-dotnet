@@ -1,3 +1,4 @@
+// examples/winforms/clock-app/clock-app.ts
 import dotnet from '../../../src/index.ts';
 
 const System = dotnet.System as any;

@@ -1,3 +1,4 @@
+// examples/winforms/counter/counter.ts
 import dotnet from '../../../src/index.ts';
 
 const System = dotnet.System as any;

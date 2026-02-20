@@ -1,3 +1,4 @@
+# scripts/PsBridge/PsBridge.psm1
 $scriptDir = Split-Path $MyInvocation.MyCommand.Path
 
 $csFiles = @(
