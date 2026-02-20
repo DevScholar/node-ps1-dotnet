@@ -1,5 +1,6 @@
-import { System } from '../../../src/index.ts';
+import dotnet from '../../../src/index.ts';
 
+const System = dotnet.System as any;
 const Console = System.Console;
 
 Console.WriteLine("=== Greeting Program ===");

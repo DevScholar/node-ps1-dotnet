@@ -57,6 +57,18 @@ You can use the `--runtime=[node|deno|bun]` option to specify the runtime. For e
 node start.js examples/clock-app/clock-app.ts --runtime=deno
 ```
 
+## Console Apps
+
+### Greeting App
+
+```bat
+node start.js examples/console/greeting/greeting.ts
+```
+### Hello App
+
+```bat
+node start.js examples/console/hello/hello.ts
+```
 ## Clock App
 
 ```bat
