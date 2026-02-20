@@ -20,6 +20,20 @@ let ipc: IpcSync | null = null;
 let proc: cp.ChildProcess | null = null;
 let initialized = false;
 
+function cleanup() {
+    if (proc && !proc.killed) {
+        proc.kill();
+    }
+    if (ipc) {
+        try {
+            ipc.close();
+        } catch {}
+    }
+    proc = null;
+    ipc = null;
+    initialized = false;
+}
+
 function initialize() {
     if (initialized) return;
     
@@ -36,8 +50,31 @@ function initialize() {
         '-Command', `& '${scriptPath}' -PipeName '${pipeName}'`
     ], { stdio: 'inherit', windowsHide: false });
 
+    // 让子进程不阻止 Node.js 退出
+    proc.unref();
+
     proc.on('exit', (code) => {
         process.exit(0);
+    });
+
+    // 注册进程退出时的清理逻辑
+    process.on('beforeExit', (exitCode) => {
+        cleanup();
+    });
+    
+    process.on('SIGINT', () => {
+        cleanup();
+        process.exit(0);
+    });
+    process.on('SIGTERM', () => {
+        cleanup();
+        process.exit(0);
+    });
+    // 处理未捕获的异常
+    process.on('uncaughtException', (err) => {
+        console.error('Uncaught Exception:', err);
+        cleanup();
+        process.exit(1);
     });
 
     ipc = new IpcSync(pipeName, (res: any) => {
@@ -318,4 +355,33 @@ const dotnetProxy = new Proxy(function() {} as any, {
     }
 });
 
+// 创建导出命名空间代理的辅助函数（用于 node-api-dotnet 风格导出）
+function createExportNamespaceProxy(namespacePrefix: string): any {
+    const cache = new Map<string, any>();
+    
+    return new Proxy({} as any, {
+        get: (target: any, prop: string) => {
+            if (typeof prop !== 'string') return undefined;
+            if (prop === 'then') return undefined;
+            
+            const fullName = `${namespacePrefix}.${prop}`;
+            
+            // 检查缓存
+            if (cache.has(fullName)) {
+                return cache.get(fullName);
+            }
+            
+            // 尝试加载类型/命名空间
+            const result = node_ps1_dotnet._load(fullName);
+            
+            cache.set(fullName, result);
+            return result;
+        }
+    });
+}
+
+// 导出默认对象（保持向后兼容）
 export default dotnetProxy;
+
+// 导出 System 命名空间（兼容 node-api-dotnet 风格）
+export const System = createExportNamespaceProxy('System');

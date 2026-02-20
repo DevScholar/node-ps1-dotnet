@@ -126,4 +126,14 @@ export class IpcSync {
             return res;
         }
     }
+
+    close() {
+        this.exited = true;
+        if (this.fd) {
+            try {
+                fs.closeSync(this.fd);
+            } catch {}
+            this.fd = 0;
+        }
+    }
 }
