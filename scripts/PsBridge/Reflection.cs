@@ -293,13 +293,19 @@ public static class Reflection
                         }
                     }
                     
-                    throw lastException ?? new Exception("No matching constructor found");
+                    if (lastException != null)
+                    {
+                        throw lastException;
+                    }
+                    
+                    obj = Activator.CreateInstance(type);
                 }
             }
             catch (Exception ex)
             {
                 throw new Exception("New Error: " + ex.Message);
             }
+            
             return Protocol.ConvertToProtocol(obj);
         }
 
@@ -385,19 +391,19 @@ public static class Reflection
                 object result = null;
                 var bindingFlags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy | BindingFlags.IgnoreCase;
 
-                var needsManualShim = false;
+                var hasDelegateArg = false;
                 foreach (var arg in realArgs)
                 {
                     if (arg is Delegate || arg is Func<object, object, object, object, object>)
                     {
-                        needsManualShim = true;
+                        hasDelegateArg = true;
                         break;
                     }
                 }
 
                 var manualSuccess = false;
 
-                if (needsManualShim)
+                if (hasDelegateArg)
                 {
                     var methods = targetType.GetMethods(bindingFlags).Where(m => m.Name == name).ToArray();
                     
@@ -454,9 +460,30 @@ public static class Reflection
                                     break;
                                 }
                             }
-                            else if (pType.IsEnum && arg is int)
+                            else if (arg != null && !pType.IsAssignableFrom(arg.GetType()))
                             {
-                                tempArgs[i] = Enum.ToObject(pType, arg);
+                                if (pType.IsEnum && (arg is int || arg is long))
+                                {
+                                    var intVal = arg is long ? (int)(long)arg : (int)arg;
+                                    tempArgs[i] = Enum.ToObject(pType, intVal);
+                                }
+                                else if (IsNumericType(arg.GetType()) && IsNumericType(pType))
+                                {
+                                    try
+                                    {
+                                        tempArgs[i] = Convert.ChangeType(arg, pType);
+                                    }
+                                    catch
+                                    {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                                else
+                                {
+                                    match = false;
+                                    break;
+                                }
                             }
                         }
                         
@@ -476,55 +503,30 @@ public static class Reflection
 
                 if (!manualSuccess)
                 {
-                    MethodInfo method = null;
-                    
                     var methods = targetType.GetMethods(bindingFlags).Where(m => m.Name == name).ToArray();
+                    
                     if (methods.Length == 1)
                     {
-                        method = methods[0];
+                        var method = methods[0];
+                        var convertedArgs = ConvertArgsForMethod(method, realArgs);
+                        result = method.Invoke(isStatic ? null : target, convertedArgs);
                     }
                     else if (methods.Length > 1 && realArgs.Length > 0)
                     {
-                        foreach (var m in methods)
+                        MethodInfo bestMethod = FindBestMatchingMethod(methods, realArgs);
+                        if (bestMethod != null)
                         {
-                            var parameters = m.GetParameters();
-                            if (parameters.Length != realArgs.Length) continue;
-                            
-                            var match = true;
-                            for (var i = 0; i < parameters.Length; i++)
-                            {
-                                var pType = parameters[i].ParameterType;
-                                var argType = realArgs[i].GetType();
-                                if (!pType.IsAssignableFrom(argType))
-                                {
-                                    match = false;
-                                    break;
-                                }
-                            }
-                            if (match)
-                            {
-                                method = m;
-                                break;
-                            }
+                            var convertedArgs = ConvertArgsForMethod(bestMethod, realArgs);
+                            result = bestMethod.Invoke(isStatic ? null : target, convertedArgs);
                         }
-                    }
-                    
-                    if (method != null)
-                    {
-                        var instanceToCall = isStatic ? null : target;
-                        result = method.Invoke(instanceToCall, realArgs);
+                        else
+                        {
+                            result = methods[0].Invoke(isStatic ? null : target, realArgs);
+                        }
                     }
                     else if (methods.Length > 0)
                     {
                         result = methods[0].Invoke(isStatic ? null : target, realArgs);
-                    }
-                    else
-                    {
-                        var member = targetType.GetMember(name);
-                        if (member != null && member.Length > 0 && member[0] is PropertyInfo)
-                        {
-                            result = ((PropertyInfo)member[0]).GetValue(isStatic ? null : target);
-                        }
                     }
                 }
 
@@ -569,69 +571,156 @@ public static class Reflection
                 throw new Exception("Invoke Error (" + name + "): " + innerMsg);
             }
         }
-
+        
         if (action == "Release")
         {
             Protocol.RemoveBridgeObject(cmd["targetId"].ToString());
             return new Dictionary<string, object> { { "type", "void" } };
         }
         
-        if (action == "GetFrameworkInfo")
-        {
-            return new Dictionary<string, object>
-            {
-                { "type", "frameworkInfo" },
-                { "frameworkMoniker", "net481" },
-                { "runtimeVersion", Environment.Version.ToString() }
-            };
-        }
-        
-        if (action == "LoadAssembly")
-        {
-            var assemblyPath = cmd["assemblyPath"].ToString();
-            if (File.Exists(assemblyPath))
-            {
-                Assembly.LoadFrom(assemblyPath);
-            }
-            else
-            {
-                Assembly.LoadWithPartialName(assemblyPath);
-            }
-            return new Dictionary<string, object> { { "type", "void" } };
-        }
-        
-        if (action == "RequireModule")
-        {
-            var assemblyPath = cmd["assemblyPath"].ToString();
-            if (File.Exists(assemblyPath))
-            {
-                var asm = Assembly.LoadFrom(assemblyPath);
-                return new Dictionary<string, object> { { "type", "namespace" }, { "value", asm.GetName().Name } };
-            }
-            throw new Exception("Module not found");
-        }
-        
-        if (action == "Resolved")
-        {
-            return new Dictionary<string, object> { { "type", "void" } };
-        }
-        
-        if (action == "AwaitTask")
-        {
-            var task = (Task)BridgeState.ObjectStore[cmd["taskId"].ToString()];
-            try
-            {
-                task.GetAwaiter().GetResult();
-                var prop = task.GetType().GetProperty("Result");
-                var res = prop != null ? prop.GetValue(task, null) : null;
-                return Protocol.ConvertToProtocol(res);
-            }
-            catch (Exception ex)
-            {
-                throw new Exception("Task Error: " + ex.Message);
-            }
-        }
-
         return new Dictionary<string, object> { { "type", "void" } };
+    }
+    
+    private static object[] ConvertArgsForMethod(MethodInfo method, object[] args)
+    {
+        if (args == null || args.Length == 0) return args;
+        
+        var parameters = method.GetParameters();
+        if (parameters.Length != args.Length) return args;
+        
+        var convertedArgs = new object[args.Length];
+        Array.Copy(args, convertedArgs, args.Length);
+        
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var pType = parameters[i].ParameterType;
+            var arg = args[i];
+            
+            if (arg == null || pType.IsAssignableFrom(arg.GetType()))
+            {
+                continue;
+            }
+            
+            var argType = arg.GetType();
+            
+            if (pType.IsEnum)
+            {
+                if (arg is int || arg is long)
+                {
+                    var intVal = arg is long ? (int)(long)arg : (int)arg;
+                    convertedArgs[i] = Enum.ToObject(pType, intVal);
+                }
+            }
+            else if (pType == typeof(TimeSpan))
+            {
+                if (arg is long)
+                {
+                    convertedArgs[i] = TimeSpan.FromMilliseconds((long)arg);
+                }
+                else if (arg is int)
+                {
+                    convertedArgs[i] = TimeSpan.FromMilliseconds((int)arg);
+                }
+                else if (arg is double)
+                {
+                    convertedArgs[i] = TimeSpan.FromMilliseconds((double)arg);
+                }
+            }
+            else if (argType == typeof(string) && (pType == typeof(string) || pType == typeof(object)))
+            {
+                convertedArgs[i] = arg;
+            }
+            else if (IsNumericType(argType) && IsNumericType(pType))
+            {
+                try
+                {
+                    convertedArgs[i] = Convert.ChangeType(arg, pType);
+                }
+                catch { }
+            }
+            else if (arg is IConvertible && pType != typeof(string))
+            {
+                try
+                {
+                    convertedArgs[i] = Convert.ChangeType(arg, pType);
+                }
+                catch { }
+            }
+        }
+        
+        return convertedArgs;
+    }
+    
+    private static MethodInfo FindBestMatchingMethod(MethodInfo[] methods, object[] args)
+    {
+        if (methods == null || methods.Length == 0 || args == null || args.Length == 0)
+            return null;
+        
+        foreach (var method in methods)
+        {
+            var parameters = method.GetParameters();
+            if (parameters.Length != args.Length) continue;
+            
+            var match = true;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var pType = parameters[i].ParameterType;
+                var arg = args[i];
+                var argType = arg != null ? arg.GetType() : null;
+                
+                if (argType == null) continue;
+                
+                if (!pType.IsAssignableFrom(argType))
+                {
+                    if (argType == typeof(string))
+                    {
+                        if (pType != typeof(string) && pType != typeof(object))
+                        {
+                            match = false;
+                            break;
+                        }
+                        continue;
+                    }
+                    
+                    if (pType.IsEnum)
+                    {
+                        if (!(arg is int || arg is long))
+                        {
+                            match = false;
+                            break;
+                        }
+                    }
+                    else if (pType == typeof(TimeSpan) && IsNumericType(argType))
+                    {
+                        continue;
+                    }
+                    else if (IsNumericType(argType) && IsNumericType(pType))
+                    {
+                        continue;
+                    }
+                    else if (args[i] is IConvertible && pType != typeof(string))
+                    {
+                        continue;
+                    }
+                    else
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+            }
+            
+            if (match) return method;
+        }
+        
+        return null;
+    }
+    
+    private static bool IsNumericType(Type type)
+    {
+        return type == typeof(int) || type == typeof(long) || type == typeof(short) ||
+               type == typeof(byte) || type == typeof(double) || type == typeof(float) ||
+               type == typeof(decimal) || type == typeof(uint) || type == typeof(ulong) ||
+               type == typeof(ushort) || type == typeof(sbyte);
     }
 }
