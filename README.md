@@ -59,15 +59,15 @@ node start.js examples/clock-app/clock-app.ts --runtime=deno
 
 ## Console Apps
 
-### Greeting App
+### Console Input App
 
 ```bat
-node start.js examples/console/greeting/greeting.ts
+node start.js examples/console/console-input/console-input.ts
 ```
-### Hello App
+### Await Delay App
 
 ```bat
-node start.js examples/console/hello/hello.ts
+node start.js examples/console/await-delay/await-delay.ts
 ```
 ## Clock App
 

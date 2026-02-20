@@ -572,6 +572,28 @@ public static class Reflection
             }
         }
         
+        if (action == "AwaitTask")
+        {
+            var taskId = cmd["taskId"].ToString();
+            var task = (Task)BridgeState.ObjectStore[taskId];
+            try
+            {
+                task.Wait();
+                var taskType = task.GetType();
+                if (taskType.IsGenericType && taskType.GetGenericTypeDefinition() == typeof(Task<>))
+                {
+                    var result = taskType.GetProperty("Result").GetValue(task);
+                    return Protocol.ConvertToProtocol(result);
+                }
+                return new Dictionary<string, object> { { "type", "void" } };
+            }
+            catch (AggregateException ae)
+            {
+                var innerMsg = ae.InnerException != null ? ae.InnerException.Message : ae.ToString();
+                throw new Exception("Task Error: " + innerMsg);
+            }
+        }
+        
         if (action == "Release")
         {
             Protocol.RemoveBridgeObject(cmd["targetId"].ToString());
