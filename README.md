@@ -32,7 +32,7 @@ node start.js examples/console/await-delay/await-delay.ts
 ```bat
 node start.js examples/winforms/counter/counter.ts
 ```
-## WPF Counter App
+### WPF Counter App
 
 ```bat
 node start.js examples/wpf/counter/counter.ts
