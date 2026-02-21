@@ -82,11 +82,6 @@ node start.js examples/console/console-input/console-input.ts
 ```bat
 node start.js examples/console/await-delay/await-delay.ts
 ```
-## Clock App
-
-```bat
-node start.js examples/winforms/clock-app/clock-app.ts
-```
 ## Counter App
 
 ```bat
