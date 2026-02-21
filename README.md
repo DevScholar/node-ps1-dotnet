@@ -7,46 +7,59 @@ This is a project that mimics the [Node API for .NET](https://github.com/microso
 # Example Code
 
 ```js
-import { System } from '../../../src/index.ts';
+// examples/winforms/clock-app/clock-app.ts
+import dotnet from '../../../src/index.ts';
 
+dotnet.load('System.Windows.Forms');
+dotnet.load('System.Drawing');
+
+const System = dotnet.System as any;
 const Forms = System.Windows.Forms;
 const Drawing = System.Drawing;
 
-let clickCount = 0;
-
-console.log("--- WinForms Counter ---");
+console.log("--- WinForms Clock ---");
 
 const form = new Forms.Form();
-form.Text = "Counter App";
-form.Width = 640;
-form.Height = 480;
+form.Text = "Clock App";
+form.Width = 400;
+form.Height = 300;
 form.StartPosition = 1;
 
 const label = new Forms.Label();
-label.Text = "Clicks: 0";
-label.Font = new Drawing.Font("Arial", 24);
-label.AutoSize = true;
-label.Location = new Drawing.Point(90, 30);
+label.Dock = 5;
+label.TextAlign = 32;
+label.Text = "Loading...";
+
+label.Font = new Drawing.Font("Impact", 36);
 form.Controls.Add(label);
 
-const button = new Forms.Button();
-button.Text = "Click to Add";
-button.Font = new Drawing.Font("Arial", 14);
-button.AutoSize = true;
-button.Location = new Drawing.Point(100, 90);
+const timer = new Forms.Timer();
+timer.Interval = 1000;
 
-button.add_Click(() => {
-    clickCount++;
-    const message = `Clicked ${clickCount} times`;
-    label.Text = message;
-    console.log(message);
+let running = true;
+
+form.add_FormClosing(() => {
+    running = false;
+    timer.Stop();
 });
 
-form.Controls.Add(button);
+timer.add_Tick(() => {
+    if (!running) return;
+    const now = new Date().toLocaleTimeString();
+    label.Text = now;
 
-console.log("Click the button to increase the counter...");
+    if (new Date().getSeconds() % 2 === 0) {
+        label.ForeColor = Drawing.Color.Red;
+    } else {
+        label.ForeColor = Drawing.Color.Black;
+    }
+});
+
+timer.Start();
+
+console.log("Starting application...");
+
 Forms.Application.Run(form);
-
 ```
 
 # Examples
