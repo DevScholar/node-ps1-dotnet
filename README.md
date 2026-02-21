@@ -67,7 +67,7 @@ Forms.Application.Run(form);
 You can use the `--runtime=[node|deno|bun]` option to specify the runtime. For example:
 
 ```bat
-node start.js examples/clock-app/clock-app.ts --runtime=deno
+node start.js examples/console/console-input/console-input.ts --runtime=deno
 ```
 
 ## Console Apps

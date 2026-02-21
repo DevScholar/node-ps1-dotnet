@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import * as cp from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getPowerShellPath } from './utils.ts';
-import { IpcSync, readLineSync } from './ipc.ts';
+import { IpcSync } from './ipc.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,17 +21,24 @@ let proc: cp.ChildProcess | null = null;
 let initialized = false;
 
 function cleanup() {
-    if (proc && !proc.killed) {
-        proc.kill();
-    }
+    if (!initialized) return;
+    initialized = false;
+    
     if (ipc) {
         try {
             ipc.close();
         } catch {}
     }
+    
+    if (proc && !proc.killed) {
+        try {
+            // Windows 下强制杀死进程，防止标准流卡死 Node.js 的事件循环
+            proc.kill('SIGKILL');
+        } catch {}
+    }
+    
     proc = null;
     ipc = null;
-    initialized = false;
 }
 
 function initialize() {
@@ -50,15 +57,21 @@ function initialize() {
         '-Command', `& '${scriptPath}' -PipeName '${pipeName}'`
     ], { stdio: 'inherit', windowsHide: false });
 
-    // 让子进程不阻止 Node.js 退出
+    // 让子进程尽量不阻止 Node.js 退出
     proc.unref();
 
     proc.on('exit', (code) => {
         process.exit(0);
     });
 
-    // 注册进程退出时的清理逻辑
-    process.on('beforeExit', (exitCode) => {
+    // 修复脚本跑完后无法停机卡死的 Bug：
+    // 当 V8 执行到底，事件循环清空时，触发 beforeExit -> 强杀子进程并立刻退出
+    process.on('beforeExit', () => {
+        cleanup();
+        process.exit(0); 
+    });
+    
+    process.on('exit', () => {
         cleanup();
     });
     
@@ -66,11 +79,12 @@ function initialize() {
         cleanup();
         process.exit(0);
     });
+    
     process.on('SIGTERM', () => {
         cleanup();
         process.exit(0);
     });
-    // 处理未捕获的异常
+    
     process.on('uncaughtException', (err) => {
         console.error('Uncaught Exception:', err);
         cleanup();
@@ -321,9 +335,7 @@ export const node_ps1_dotnet = {
 
     _close() {
         if (proc) proc.kill();
-        proc = null;
-        ipc = null;
-        initialized = false;
+        cleanup();
     },
 
     _getAssembly(assemblyName: string): any {
@@ -341,7 +353,7 @@ function createNamespaceProxy(assemblyName: string) {
     return new Proxy({}, {
         get: (target: any, prop: string) => {
             if (typeof prop !== 'string') return undefined;
-            if (prop === 'then') return undefined;
+            if (prop === 'then') return undefined; // 处理 Promise 检查
             return node_ps1_dotnet._load(`${assemblyName}.${prop}`);
         }
     });
@@ -362,7 +374,6 @@ const dotnetProxy = new Proxy(function() {} as any, {
     }
 });
 
-// 创建导出命名空间代理的辅助函数（用于 node-api-dotnet 风格导出）
 function createExportNamespaceProxy(namespacePrefix: string): any {
     const cache = new Map<string, any>();
     
@@ -372,23 +383,16 @@ function createExportNamespaceProxy(namespacePrefix: string): any {
             if (prop === 'then') return undefined;
             
             const fullName = `${namespacePrefix}.${prop}`;
-            
-            // 检查缓存
             if (cache.has(fullName)) {
                 return cache.get(fullName);
             }
             
-            // 尝试加载类型/命名空间
             const result = node_ps1_dotnet._load(fullName);
-            
             cache.set(fullName, result);
             return result;
         }
     });
 }
 
-// 导出默认对象（保持向后兼容）
 export default dotnetProxy;
-
-// 导出 System 命名空间（兼容 node-api-dotnet 风格）
 export const System = createExportNamespaceProxy('System');

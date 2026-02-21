@@ -1,238 +1,156 @@
 // scripts/PsBridge/PsHost.cs
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
 using System.Threading;
-using System.Timers;
-using System.Windows.Forms;
 
 public static class PsHost
 {
     public static Func<object> ProcessNestedCommands { get; set; }
 
-    private static System.Timers.Timer _msgTimer;
+    public static BlockingCollection<Dictionary<string, object>> CommandQueue = new BlockingCollection<Dictionary<string, object>>();
+    public static BlockingCollection<Dictionary<string, object>> ReplyQueue = new BlockingCollection<Dictionary<string, object>>();
+    public static SynchronizationContext MainSyncContext { get; set; }
 
     public static object RunProcessNestedCommands()
     {
-        var reader = BridgeState.Reader;
-        var pipe = BridgeState.PipeServer;
-        
-        while (pipe.IsConnected)
+        while (BridgeState.PipeServer != null && BridgeState.PipeServer.IsConnected)
         {
-            var line = reader.ReadLine();
-            if (line == null) break;
-            
-            var cmd = SimpleJsonDeserializer.Deserialize(line) as Dictionary<string, object>;
-            
-            if (cmd != null && cmd.ContainsKey("type") && cmd["type"].ToString() == "reply")
+            Dictionary<string, object> reply;
+            if (ReplyQueue.TryTake(out reply, 10))
             {
-                return cmd["result"];
+                if (reply != null && reply.ContainsKey("result"))
+                {
+                    return reply["result"];
+                }
+                return null;
             }
 
-            try
+            Dictionary<string, object> cmd;
+            if (CommandQueue.TryTake(out cmd, 5))
             {
-                var result = Reflection.InvokeReflectionLogic(cmd);
-                var json = SimpleJson.Serialize(result);
-                BridgeState.Writer.WriteLine(json);
-            }
-            catch (Exception ex)
-            {
-                var errMsg = ex.Message != null ? ex.Message : ex.ToString();
-                var errJson = SimpleJson.Serialize(new Dictionary<string, object>
-                {
-                    { "type", "error" },
-                    { "message", errMsg.Replace("\"", "'") }
-                });
-                BridgeState.Writer.WriteLine(errJson);
+                ExecuteCommand(cmd);
             }
         }
         return null;
     }
 
-    public static void StartMessagePump()
+    private static void UpdateSyncContext()
     {
-        _msgTimer = new System.Timers.Timer();
-        _msgTimer.Interval = 10;
-        _msgTimer.AutoReset = true;
-        
-        _msgTimer.Elapsed += (sender, e) =>
+        if (SynchronizationContext.Current != null && MainSyncContext != SynchronizationContext.Current)
         {
-            if (BridgeState.IsClosing) return;
-            if (!BridgeState.PipeServer.IsConnected)
-            {
-                BridgeState.IsClosing = true;
-                return;
-            }
-            try
-            {
-                if (BridgeState.Reader.Peek() >= 0)
-                {
-                    var line = BridgeState.Reader.ReadLine();
-                    HandleLine(line);
-                }
-            }
-            catch
-            {
-                BridgeState.IsClosing = true;
-            }
-        };
-        
-        _msgTimer.Start();
-    }
-
-    public static void StopMessagePump()
-    {
-        if (_msgTimer != null)
-        {
-            _msgTimer.Stop();
-            _msgTimer.Dispose();
-            _msgTimer = null;
+            MainSyncContext = SynchronizationContext.Current;
         }
     }
 
-    public static void ProcessTick()
+    public static void ExecuteCommand(Dictionary<string, object> cmd)
     {
-        if (BridgeState.IsClosing) return;
-        if (!BridgeState.PipeServer.IsConnected) return;
-        try
-        {
-            if (BridgeState.Reader.Peek() >= 0)
-            {
-                var line = BridgeState.Reader.ReadLine();
-                HandleLine(line);
-            }
-        }
-        catch { }
-    }
-
-    public static void StartGuiLoop(object mainForm)
-    {
-        StartMessagePump();
+        if (cmd == null) return;
         
-        ApplicationContext ctx = null;
-        if (mainForm is Form)
-        {
-            ctx = new ApplicationContext((Form)mainForm);
-        }
-        else
-        {
-            ctx = new ApplicationContext();
-        }
-
-        Application.Run(ctx);
-        
-        BridgeState.IsClosing = true;
-        
-        StopMessagePump();
-        
-        Thread.Sleep(100);
-        
-        if (BridgeState.Writer != null)
-        {
-            try
-            {
-                var exitSignal = SimpleJson.Serialize(new Dictionary<string, object> { { "type", "exit" } });
-                BridgeState.Writer.WriteLine(exitSignal);
-                BridgeState.Writer.Flush();
-            }
-            catch { }
-        }
-        
-        Thread.Sleep(50);
-        
-        if (BridgeState.PipeServer != null)
-        {
-            try
-            {
-                if (BridgeState.PipeServer.IsConnected)
-                {
-                    BridgeState.PipeServer.Close();
-                }
-                BridgeState.PipeServer.Dispose();
-            }
-            catch { }
-        }
-        
-        Environment.Exit(0);
-    }
-
-    public static bool HandleLine(string line)
-    {
-        var cmd = SimpleJsonDeserializer.Deserialize(line) as Dictionary<string, object>;
-        if (cmd != null && cmd.ContainsKey("type") && cmd["type"].ToString() == "reply")
-        {
-            return true;
-        }
-
         try
         {
             var result = Reflection.InvokeReflectionLogic(cmd);
+            UpdateSyncContext();
+
             var json = SimpleJson.Serialize(result);
-            try
+            lock (BridgeState.Writer)
             {
                 BridgeState.Writer.WriteLine(json);
             }
-            catch (IOException)
-            {
-                return false;
-            }
-        }
-        catch (IOException)
-        {
-            return false;
         }
         catch (Exception ex)
         {
-            var errMsg = ex.Message != null ? ex.Message : ex.ToString();
+            UpdateSyncContext();
+            var errMsg = ex.InnerException != null ? ex.InnerException.Message : ex.Message;
             var errJson = SimpleJson.Serialize(new Dictionary<string, object>
             {
                 { "type", "error" },
                 { "message", errMsg.Replace("\"", "'") }
             });
-            try
+            lock (BridgeState.Writer)
             {
                 BridgeState.Writer.WriteLine(errJson);
             }
-            catch (IOException) { }
         }
-        return false;
+    }
+
+    public static void DrainCommandQueue(object state)
+    {
+        Dictionary<string, object> cmd;
+        while (CommandQueue.TryTake(out cmd))
+        {
+            UpdateSyncContext();
+            ExecuteCommand(cmd);
+        }
     }
 
     public static void StartServer()
     {
+        // Key change: Changed PipeOptions.None to PipeOptions.Asynchronous
+        // This allows Windows to perform concurrent overlapped I/O on the handle, so reader thread suspension will never block main thread writes!
         BridgeState.PipeServer = new NamedPipeServerStream(
-            BridgeState.PipeName,
-            PipeDirection.InOut,
-            1,
-            PipeTransmissionMode.Byte,
-            PipeOptions.None
-        );
+            BridgeState.PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         
         BridgeState.PipeServer.WaitForConnection();
-        
         BridgeState.Reader = new StreamReader(BridgeState.PipeServer);
         BridgeState.Writer = new StreamWriter(BridgeState.PipeServer);
         BridgeState.Writer.AutoFlush = true;
 
-        while (BridgeState.PipeServer.IsConnected)
+        var readerThread = new Thread(() =>
         {
             try
             {
-                var line = BridgeState.Reader.ReadLine();
-                if (line == null) break;
-                HandleLine(line);
+                while (BridgeState.PipeServer.IsConnected)
+                {
+                    var line = BridgeState.Reader.ReadLine();
+                    if (line == null) break;
+
+                    var msg = SimpleJsonDeserializer.Deserialize(line) as Dictionary<string, object>;
+                    if (msg == null) continue;
+
+                    if (msg.ContainsKey("type") && msg["type"].ToString() == "reply")
+                    {
+                        ReplyQueue.Add(msg);
+                    }
+                    else
+                    {
+                        CommandQueue.Add(msg);
+                        if (MainSyncContext != null)
+                        {
+                            MainSyncContext.Post(DrainCommandQueue, null);
+                        }
+                    }
+                }
             }
-            catch (IOException)
+            catch { }
+            finally
             {
-                break;
+                CommandQueue.CompleteAdding();
+                ReplyQueue.CompleteAdding();
+            }
+        });
+        readerThread.IsBackground = true;
+        readerThread.Start();
+
+        try
+        {
+            foreach (var cmd in CommandQueue.GetConsumingEnumerable())
+            {
+                UpdateSyncContext();
+                ExecuteCommand(cmd);
             }
         }
+        catch { }
+
+        Environment.Exit(0);
     }
 }
 
+// SimpleJsonDeserializer requires no changes, it works as-is...
 public static class SimpleJsonDeserializer
 {
     private static int _index;

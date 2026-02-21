@@ -315,13 +315,6 @@ public static class Reflection
             var argsObj = cmd.ContainsKey("args") ? cmd["args"] : null;
             var realArgs = Protocol.ResolveArgs(argsObj);
 
-            if (name == "Run" && target.ToString() == "System.Windows.Forms.Application")
-            {
-                var form = realArgs.Length > 0 ? realArgs[0] : null;
-                PsHost.StartGuiLoop(form);
-                return new Dictionary<string, object> { { "type", "void" } };
-            }
-
             var isStatic = target is Type;
             var targetType = isStatic ? (Type)target : target.GetType();
 
