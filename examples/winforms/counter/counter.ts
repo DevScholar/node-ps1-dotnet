@@ -10,7 +10,10 @@ const Drawing = System.Drawing;
 
 let clickCount = 0;
 
-console.log("--- WinForms Counter ---");
+console.log("--- WinForms Counter (XP Style) ---");
+
+Forms.Application.EnableVisualStyles();
+Forms.Application.SetCompatibleTextRenderingDefault(false);
 
 const form = new Forms.Form();
 form.Text = "Counter App";
