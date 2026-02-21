@@ -42,6 +42,6 @@ node start.js examples/wpf/counter/counter.ts
 ```bat
 node start.js examples/wpf/webview2-browser/webview2-browser.ts
 ```
-## License
+# License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE.md) file for details.
