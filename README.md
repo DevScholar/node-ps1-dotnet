@@ -82,13 +82,17 @@ node start.js examples/console/console-input/console-input.ts
 ```bat
 node start.js examples/console/await-delay/await-delay.ts
 ```
-## Counter App
+## WinForms Counter App
 
 ```bat
 node start.js examples/winforms/counter/counter.ts
 ```
+## WPF Counter App
 
-## WebView2 Browser
+```bat
+node start.js examples/wpf/counter/counter.ts
+```
+## WPF WebView2 Browser
 
 ```bat
 node start.js examples/wpf/webview2-browser/webview2-browser.ts
