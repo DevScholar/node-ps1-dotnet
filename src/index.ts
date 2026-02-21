@@ -19,6 +19,7 @@ const typeMetadataCache = new Map<string, Map<string, string>>();
 let ipc: IpcSync | null = null;
 let proc: cp.ChildProcess | null = null;
 let initialized = false;
+let cachedRuntimeInfo: { frameworkMoniker: string; runtimeVersion: string } | null = null;
 
 function cleanup() {
     if (!initialized) return;
@@ -346,6 +347,17 @@ export const node_ps1_dotnet = {
         initialize();
         const res = ipc!.send({ action: 'LoadAssembly', assemblyName });
         return createProxy(res);
+    },
+
+    _getRuntimeInfo(): { frameworkMoniker: string; runtimeVersion: string } {
+        if (cachedRuntimeInfo) return cachedRuntimeInfo;
+        initialize();
+        const res = ipc!.send({ action: 'GetRuntimeInfo' });
+        cachedRuntimeInfo = {
+            frameworkMoniker: res.frameworkMoniker || 'netstandard2.0',
+            runtimeVersion: res.runtimeVersion || '0.0.0'
+        };
+        return cachedRuntimeInfo;
     }
 };
 
@@ -363,7 +375,15 @@ const dotnetProxy = new Proxy(function() {} as any, {
     get: (target: any, prop: string) => {
         if (prop === 'default') return dotnetProxy;
         if (prop === 'then') return undefined;
-        if (prop === 'load') return (assemblyName: string) => node_ps1_dotnet._loadAssembly(assemblyName);
+        if (prop === 'load') return (assemblyNameOrFilePath: string) => {
+            node_ps1_dotnet._loadAssembly(assemblyNameOrFilePath);
+        };
+        if (prop === 'frameworkMoniker') {
+            return node_ps1_dotnet._getRuntimeInfo().frameworkMoniker;
+        }
+        if (prop === 'runtimeVersion') {
+            return node_ps1_dotnet._getRuntimeInfo().runtimeVersion;
+        }
         if (prop === '__inspect') {
             return (targetId: string, memberName: string) => ipc!.send({ action: 'Inspect', targetId, memberName });
         }

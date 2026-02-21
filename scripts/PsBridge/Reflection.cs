@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
 public static class Reflection
@@ -11,6 +12,21 @@ public static class Reflection
     public static Dictionary<string, object> InvokeReflectionLogic(Dictionary<string, object> cmd)
     {
         var action = cmd["action"].ToString();
+
+        if (action == "GetRuntimeInfo")
+        {
+            var frameworkDescription = RuntimeInformation.FrameworkDescription;
+            var environmentVersion = Environment.Version.ToString();
+            string frameworkMoniker = InferFrameworkMoniker();
+            
+            return new Dictionary<string, object>
+            {
+                { "type", "runtimeInfo" },
+                { "frameworkMoniker", frameworkMoniker },
+                { "runtimeVersion", environmentVersion },
+                { "frameworkDescription", frameworkDescription }
+            };
+        }
 
         if (action == "GetType")
         {
@@ -749,6 +765,49 @@ public static class Reflection
         }
         
         return null;
+    }
+    
+    private static string InferFrameworkMoniker()
+    {
+        var frameworkDescription = RuntimeInformation.FrameworkDescription;
+        var environmentVersion = Environment.Version;
+        
+        if (frameworkDescription.StartsWith(".NET Framework"))
+        {
+            var versionParts = environmentVersion.ToString().Split('.');
+            if (versionParts.Length >= 2)
+            {
+                int major = int.Parse(versionParts[0]);
+                int minor = int.Parse(versionParts[1]);
+                return "net" + major + minor;
+            }
+            return "net472";
+        }
+        
+        if (frameworkDescription.StartsWith(".NET") && !frameworkDescription.StartsWith(".NET Framework"))
+        {
+            var versionParts = environmentVersion.ToString().Split('.');
+            if (versionParts.Length >= 1)
+            {
+                int major = int.Parse(versionParts[0]);
+                return "net" + major + ".0";
+            }
+            return "net8.0";
+        }
+        
+        if (frameworkDescription.StartsWith(".NET Core"))
+        {
+            var versionParts = environmentVersion.ToString().Split('.');
+            if (versionParts.Length >= 2)
+            {
+                int major = int.Parse(versionParts[0]);
+                int minor = int.Parse(versionParts[1]);
+                return "netcoreapp" + major + "." + minor;
+            }
+            return "netcoreapp3.1";
+        }
+        
+        return "netstandard2.0";
     }
     
     private static bool IsNumericType(Type type)
