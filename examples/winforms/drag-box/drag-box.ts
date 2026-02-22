@@ -50,12 +50,11 @@ box.add_MouseUp((sender: any, e: any) => {
 
 box.add_MouseMove((sender: any, e: any) => {
     if (isDragging) {
-        // e.X and e.Y are coordinates relative to the Box itself
         currentX = currentX + e.X - startDragOffsetX;
         currentY = currentY + e.Y - startDragOffsetY;
         
-        // Push the new location to WinForms
-        box.Location = new Drawing.Point(currentX, currentY);
+        box.Left = currentX;
+        box.Top = currentY;
     }
 });
 

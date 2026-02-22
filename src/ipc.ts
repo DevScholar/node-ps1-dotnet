@@ -90,18 +90,34 @@ export class IpcSync {
         }
     }
 
+    private tryConnect(pipePath: string): boolean {
+        try {
+            this.fd = fs.openSync(pipePath, 'r+');
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
     connect() {
         const pipePath = `\\\\.\\pipe\\${this.pipeName}`;
         const start = Date.now();
+        let delay = 1;
+        const maxDelay = 100;
+
         while (true) {
-            try {
-                this.fd = fs.openSync(pipePath, 'r+');
-                break;
-            } catch (e: any) {
-                if (Date.now() - start > 5000) throw new Error(`Timeout connecting pipe: ${pipePath}`);
-                const s = Date.now() + 50;
-                while (Date.now() < s);
+            if (this.tryConnect(pipePath)) break;
+
+            if (Date.now() - start > 5000) {
+                throw new Error(`Timeout connecting pipe: ${pipePath}`);
             }
+
+            const target = Date.now() + delay;
+            while (Date.now() < target) {
+                if (this.tryConnect(pipePath)) return;
+            }
+
+            delay = Math.min(delay * 1.5, maxDelay);
         }
     }
 

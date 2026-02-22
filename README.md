@@ -50,6 +50,11 @@ node start.js examples/winforms/drag-box/drag-box.ts
 ```bat
 node start.js examples/wpf/counter/counter.ts
 ```
+### WPF Drag Box App
+
+```bat
+node start.js examples/wpf/drag-box/drag-box.ts
+```
 ### WPF WebView2 Browser
 
 ```bat

@@ -15,6 +15,9 @@ const gcRegistry = new FinalizationRegistry((id: string) => {
 
 const callbackRegistry = new Map<string, Function>();
 const typeMetadataCache = new Map<string, Map<string, string>>();
+const globalTypeCache = new Map<string, Map<string, string>>();
+const pendingInspectRequests = new Map<string, string[]>();
+const pendingInspectTimeout = new Map<string, NodeJS.Timeout>();
 
 let ipc: IpcSync | null = null;
 let proc: cp.ChildProcess | null = null;
@@ -110,6 +113,73 @@ function initialize() {
     initialized = true;
 }
 
+const typeNameCache = new Map<string, string>();
+
+function getObjectTypeName(id: string): string | null {
+    if (typeNameCache.has(id)) {
+        return typeNameCache.get(id)!;
+    }
+    try {
+        const res = ipc!.send({ action: 'GetTypeName', targetId: id });
+        if (res && res.typeName) {
+            typeNameCache.set(id, res.typeName);
+            return res.typeName;
+        }
+    } catch {}
+    return null;
+}
+
+function getTypeMembers(typeName: string, memberNames: string[]): Map<string, string> | null {
+    if (globalTypeCache.has(typeName)) {
+        const cached = globalTypeCache.get(typeName)!;
+        const result = new Map<string, string>();
+        let allFound = true;
+        for (const name of memberNames) {
+            if (cached.has(name)) {
+                result.set(name, cached.get(name)!);
+            } else {
+                allFound = false;
+            }
+        }
+        if (allFound) return result;
+    }
+
+    try {
+        const res = ipc!.send({ action: 'InspectType', typeName, memberNames });
+        if (res && res.members) {
+            if (!globalTypeCache.has(typeName)) {
+                globalTypeCache.set(typeName, new Map());
+            }
+            const cache = globalTypeCache.get(typeName)!;
+            for (const [name, type] of Object.entries(res.members as Record<string, string>)) {
+                cache.set(name, type);
+            }
+            return new Map(Object.entries(res.members as Record<string, string>));
+        }
+    } catch {}
+    return null;
+}
+
+function ensureMemberTypeCached(id: string, memberName: string, memberCache: Map<string, string>) {
+    if (memberCache.has(memberName)) return;
+
+    const typeName = getObjectTypeName(id);
+    if (typeName) {
+        const members = getTypeMembers(typeName, [memberName]);
+        if (members && members.has(memberName)) {
+            memberCache.set(memberName, members.get(memberName)!);
+            return;
+        }
+    }
+
+    try {
+        const inspectRes = ipc!.send({ action: 'Inspect', targetId: id, memberName });
+        memberCache.set(memberName, inspectRes.memberType);
+    } catch {
+        memberCache.set(memberName, 'method');
+    }
+}
+
 function createProxyWithInlineProps(meta: any): any {
     if (meta.type !== 'ref') return createProxy(meta);
 
@@ -146,13 +216,8 @@ function createProxyWithInlineProps(meta: any): any {
             let memType = memberCache.get(prop);
 
             if (!memType) {
-                try {
-                    const inspectRes = ipc!.send({ action: 'Inspect', targetId: id, memberName: prop });
-                    memType = inspectRes.memberType;
-                    memberCache.set(prop, memType!);
-                } catch (e) {
-                    memType = 'method';
-                }
+                ensureMemberTypeCached(id, prop, memberCache);
+                memType = memberCache.get(prop);
             }
 
             if (memType === 'property') {
@@ -204,11 +269,43 @@ function createProxyWithInlineProps(meta: any): any {
     return proxy;
 }
 
+function createLazyArray(arr: any[]): any {
+    return new Proxy(arr, {
+        get(target, prop) {
+            if (typeof prop === 'symbol') return target[prop];
+            const index = Number(prop);
+            if (!isNaN(index) && index >= 0 && index < target.length) {
+                return createProxy(target[index]);
+            }
+            if (prop === 'length') return target.length;
+            if (prop === 'map' || prop === 'filter' || prop === 'forEach' || prop === 'reduce') {
+                return (...args: any[]) => {
+                    const transformed = target.map((item: any) => createProxy(item));
+                    return transformed[prop](...args);
+                };
+            }
+            if (prop === 'slice') {
+                return (...args: any[]) => {
+                    const sliced = target.slice(...args);
+                    return sliced.map((item: any) => createProxy(item));
+                };
+            }
+            return undefined;
+        }
+    });
+}
+
+const LARGE_ARRAY_THRESHOLD = 50;
+
 function createProxy(meta: any): any {
     if (meta.type === 'primitive' || meta.type === 'null') return meta.value;
 
     if (meta.type === 'array') {
-        return meta.value.map((item: any) => createProxy(item));
+        const arr = meta.value;
+        if (arr.length <= LARGE_ARRAY_THRESHOLD) {
+            return arr.map((item: any) => createProxy(item));
+        }
+        return createLazyArray(arr);
     }
 
     if (meta.type === 'task') {
@@ -263,13 +360,8 @@ function createProxy(meta: any): any {
             let memType = memberCache.get(prop);
 
             if (!memType) {
-                try {
-                    const inspectRes = ipc!.send({ action: 'Inspect', targetId: id, memberName: prop });
-                    memType = inspectRes.memberType;
-                    memberCache.set(prop, memType!);
-                } catch (e) {
-                    memType = 'method';
-                }
+                ensureMemberTypeCached(id, prop, memberCache);
+                memType = memberCache.get(prop);
             }
 
             if (memType === 'property') {

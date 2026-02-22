@@ -1,5 +1,6 @@
 // scripts/PsBridge/Reflection.cs
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -9,6 +10,7 @@ using System.Threading.Tasks;
 
 public static class Reflection
 {
+    private static ConcurrentDictionary<Type, PropertyInfo[]> EventArgsPropsCache = new ConcurrentDictionary<Type, PropertyInfo[]>();
     public static Dictionary<string, object> InvokeReflectionLogic(Dictionary<string, object> cmd)
     {
         var action = cmd["action"].ToString();
@@ -75,6 +77,59 @@ public static class Reflection
             return new Dictionary<string, object> { { "type", "meta" }, { "memberType", "method" } };
         }
 
+        if (action == "GetTypeName")
+        {
+            var target = BridgeState.ObjectStore[cmd["targetId"].ToString()];
+            var typeName = target.GetType().FullName;
+            return new Dictionary<string, object> { { "typeName", typeName } };
+        }
+
+        if (action == "InspectType")
+        {
+            var typeName = cmd["typeName"].ToString();
+            var memberNames = (System.Collections.ArrayList)cmd["memberNames"];
+            var type = Type.GetType(typeName);
+            if (type == null)
+            {
+                var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+                foreach (var asm in assemblies)
+                {
+                    type = asm.GetType(typeName);
+                    if (type != null) break;
+                }
+            }
+            
+            var result = new Dictionary<string, object>();
+            result["typeName"] = typeName;
+            var members = new Dictionary<string, string>();
+            
+            foreach (string memberName in memberNames)
+            {
+                var prop = type.GetProperty(memberName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
+                if (prop != null)
+                {
+                    members[memberName] = "property";
+                    continue;
+                }
+                var methods = type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
+                foreach (var m in methods)
+                {
+                    if (m.Name == memberName)
+                    {
+                        members[memberName] = "method";
+                        break;
+                    }
+                }
+                if (!members.ContainsKey(memberName))
+                {
+                    members[memberName] = "method";
+                }
+            }
+            
+            result["members"] = members;
+            return result;
+        }
+
         if (action == "AddEvent")
         {
             var target = BridgeState.ObjectStore[cmd["targetId"].ToString()];
@@ -128,7 +183,14 @@ public static class Reflection
                                 {
                                     try
                                     {
-                                        var members = arg.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                                        var argType = arg.GetType();
+                                        PropertyInfo[] members;
+                                        if (!EventArgsPropsCache.TryGetValue(argType, out members))
+                                        {
+                                            members = argType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
+                                            EventArgsPropsCache[argType] = members;
+                                        }
+                                        
                                         foreach (var member in members)
                                         {
                                             try
