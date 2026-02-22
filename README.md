@@ -4,6 +4,14 @@
 
 This is a project that mimics the [Node API for .NET](https://github.com/microsoft/node-api-dotnet), aiming to utilize the built-in PowerShell 5.1 in Windows to replace the full high-version .NET runtime, thereby reducing the program's size. Since this project uses IPC instead of C++ Addon, it is compatible not only with Node but also with Deno and Bun. You can run its example programs in the examples folder.
 
+# Requirements
+
+- **Node.js** 22+ (uses `--experimental-transform-types` for native TypeScript support)
+- **PowerShell** 5.1 (built-in on Windows 10/11)
+- **.NET Framework** 4.5+ (required by PowerShell 5.1, pre-installed on Windows 10/11)
+
+> Note: This project is Windows-only due to its dependency on PowerShell 5.1.
+
 # Examples
 
 You can use the `--runtime=[node|deno|bun]` option to specify the runtime. For example:
