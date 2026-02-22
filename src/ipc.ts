@@ -8,83 +8,87 @@ const MAX_LINE_LENGTH = 1024 * 1024 * 2; // 2MB buffer per line
 const CHUNK_SIZE = 16 * 1024; // 16KB chunk size for buffering
 const isDeno = typeof Deno !== 'undefined';
 
-const readBuffer = isDeno ? new Uint8Array(CHUNK_SIZE) : Buffer.alloc(CHUNK_SIZE);
-const resultBuffer = isDeno ? new Uint8Array(MAX_LINE_LENGTH) : Buffer.alloc(MAX_LINE_LENGTH);
-let bufferOffset = 0;
-let bufferLength = 0;
-
-export function readLineSync(fd: number): string | null {
-    let resultOffset = 0;
-    
-    while (true) {
-        if (bufferOffset >= bufferLength) {
-            try {
-                const bytesRead = fs.readSync(fd, readBuffer, 0, CHUNK_SIZE, null);
-                if (bytesRead === 0) {
-                    if (resultOffset === 0) return null;
-                    break;
-                }
-                bufferOffset = 0;
-                bufferLength = bytesRead;
-            } catch (e) {
-                return null;
-            }
-        }
-        
-        let lineEnd = -1;
-        for (let i = bufferOffset; i < bufferLength; i++) {
-            if (readBuffer[i] === 10) {
-                lineEnd = i;
-                break;
-            }
-        }
-        
-        if (lineEnd !== -1) {
-            const lineLength = lineEnd - bufferOffset;
-            if (resultOffset + lineLength > MAX_LINE_LENGTH) {
-                throw new Error("IPC Pipe line length exceeded max limit.");
-            }
-            if (isDeno) {
-                resultBuffer.set(readBuffer.subarray(bufferOffset, lineEnd), resultOffset);
-            } else {
-                (resultBuffer as Buffer).copy(readBuffer, resultOffset, bufferOffset, lineEnd);
-            }
-            resultOffset += lineLength;
-            bufferOffset = lineEnd + 1;
-            break;
-        }
-        
-        const availableLength = bufferLength - bufferOffset;
-        if (resultOffset + availableLength > MAX_LINE_LENGTH) {
-            throw new Error("IPC Pipe line length exceeded max limit.");
-        }
-        if (isDeno) {
-            resultBuffer.set(readBuffer.subarray(bufferOffset, bufferLength), resultOffset);
-        } else {
-            (resultBuffer as Buffer).copy(readBuffer, resultOffset, bufferOffset, bufferLength);
-        }
-        resultOffset += availableLength;
-        bufferOffset = bufferLength;
-    }
-
-    if (resultOffset === 0) return '';
-    
-    if (isDeno) {
-        return new TextDecoder().decode(resultBuffer.subarray(0, resultOffset));
-    } else {
-        return (resultBuffer as Buffer).toString('utf8', 0, resultOffset);
-    }
-}
-
 export class IpcSync {
     public fd: number = 0;
     private exited: boolean = false;
 
+    private readBuffer = isDeno ? new Uint8Array(CHUNK_SIZE) : Buffer.alloc(CHUNK_SIZE);
+    private resultBuffer = isDeno ? new Uint8Array(MAX_LINE_LENGTH) : Buffer.alloc(MAX_LINE_LENGTH);
+    private bufferOffset = 0;
+    private bufferLength = 0;
+
     constructor(
         private pipeName: string,
-        // Inject event handler to decouple business logic
         private onEvent: (msg: ProtocolResponse) => any 
     ) {}
+
+    private readLineSync(): string | null {
+        let resultOffset = 0;
+        
+        while (true) {
+            if (this.bufferOffset >= this.bufferLength) {
+                try {
+                    if (isDeno) {
+                        this.readBuffer.fill(0);
+                    } else {
+                        (this.readBuffer as Buffer).fill(0);
+                    }
+                    const bytesRead = fs.readSync(this.fd, this.readBuffer, 0, CHUNK_SIZE, null);
+                    if (bytesRead === 0) {
+                        if (resultOffset === 0) return null;
+                        break;
+                    }
+                    this.bufferOffset = 0;
+                    this.bufferLength = bytesRead;
+                } catch (e) {
+                    return null;
+                }
+            }
+            
+            let lineEnd = -1;
+            for (let i = this.bufferOffset; i < this.bufferLength; i++) {
+                if (this.readBuffer[i] === 10) {
+                    lineEnd = i;
+                    break;
+                }
+            }
+            
+            if (lineEnd !== -1) {
+                const lineLength = lineEnd - this.bufferOffset;
+                if (resultOffset + lineLength > MAX_LINE_LENGTH) {
+                    throw new Error("IPC Pipe line length exceeded max limit.");
+                }
+                if (isDeno) {
+                    this.resultBuffer.set(this.readBuffer.subarray(this.bufferOffset, lineEnd), resultOffset);
+                } else {
+                    (this.readBuffer as Buffer).copy(this.resultBuffer as Buffer, resultOffset, this.bufferOffset, lineEnd);
+                }
+                resultOffset += lineLength;
+                this.bufferOffset = lineEnd + 1;
+                break;
+            }
+            
+            const availableLength = this.bufferLength - this.bufferOffset;
+            if (resultOffset + availableLength > MAX_LINE_LENGTH) {
+                throw new Error("IPC Pipe line length exceeded max limit.");
+            }
+            if (isDeno) {
+                this.resultBuffer.set(this.readBuffer.subarray(this.bufferOffset, this.bufferLength), resultOffset);
+            } else {
+                (this.readBuffer as Buffer).copy(this.resultBuffer as Buffer, resultOffset, this.bufferOffset, this.bufferLength);
+            }
+            resultOffset += availableLength;
+            this.bufferOffset = this.bufferLength;
+        }
+
+        if (resultOffset === 0) return '';
+        
+        if (isDeno) {
+            return new TextDecoder().decode(this.resultBuffer.subarray(0, resultOffset));
+        } else {
+            return (this.resultBuffer as Buffer).toString('utf8', 0, resultOffset);
+        }
+    }
 
     connect() {
         const pipePath = `\\\\.\\pipe\\${this.pipeName}`;
@@ -113,7 +117,7 @@ export class IpcSync {
         }
 
         while (true) {
-            const line = readLineSync(this.fd);
+            const line = this.readLineSync();
             if (line === null) throw new Error("Pipe closed (Read EOF)");
             if (!line.trim()) continue;
 
@@ -124,11 +128,9 @@ export class IpcSync {
                 throw new Error(`Pipe closed (Invalid JSON): ${line}`);
             }
 
-            // Process event from host
             if (res.type === 'event') {
                 let result = null;
                 try {
-                    // Call injected handler
                     result = this.onEvent(res);
                 } catch (e) {
                     console.error("Callback Error:", e);
@@ -138,7 +140,7 @@ export class IpcSync {
                 try {
                     fs.writeSync(this.fd, JSON.stringify(reply) + '\n');
                 } catch {}
-                continue; // Continue waiting for actual command response
+                continue;
             }
 
             if (res.type === 'error') throw new Error(`Host Error: ${res.message}`);
