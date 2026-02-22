@@ -5,39 +5,74 @@ import type { ProtocolResponse, CommandRequest } from './types.ts';
 declare const Deno: any;
 
 const MAX_LINE_LENGTH = 1024 * 1024 * 2; // 2MB buffer per line
+const CHUNK_SIZE = 16 * 1024; // 16KB chunk size for buffering
 const isDeno = typeof Deno !== 'undefined';
-// Pre-allocate buffer to prevent memory thrashing on high-frequency IPC
-const readResultBuffer = isDeno ? new Uint8Array(MAX_LINE_LENGTH) : Buffer.alloc(MAX_LINE_LENGTH);
-const singleByteBuffer = isDeno ? new Uint8Array(1) : Buffer.alloc(1);
+
+const readBuffer = isDeno ? new Uint8Array(CHUNK_SIZE) : Buffer.alloc(CHUNK_SIZE);
+const resultBuffer = isDeno ? new Uint8Array(MAX_LINE_LENGTH) : Buffer.alloc(MAX_LINE_LENGTH);
+let bufferOffset = 0;
+let bufferLength = 0;
 
 export function readLineSync(fd: number): string | null {
-    let offset = 0;
+    let resultOffset = 0;
     
     while (true) {
-        try {
-            const r = fs.readSync(fd, singleByteBuffer, 0, 1, null);
-            if (r === 0) {
-                if (offset === 0) return null;
+        if (bufferOffset >= bufferLength) {
+            try {
+                const bytesRead = fs.readSync(fd, readBuffer, 0, CHUNK_SIZE, null);
+                if (bytesRead === 0) {
+                    if (resultOffset === 0) return null;
+                    break;
+                }
+                bufferOffset = 0;
+                bufferLength = bytesRead;
+            } catch (e) {
+                return null;
+            }
+        }
+        
+        let lineEnd = -1;
+        for (let i = bufferOffset; i < bufferLength; i++) {
+            if (readBuffer[i] === 10) {
+                lineEnd = i;
                 break;
             }
-            if (singleByteBuffer[0] === 10) break; // \n character
-            
-            readResultBuffer[offset++] = singleByteBuffer[0];
-            
-            if (offset >= MAX_LINE_LENGTH) {
+        }
+        
+        if (lineEnd !== -1) {
+            const lineLength = lineEnd - bufferOffset;
+            if (resultOffset + lineLength > MAX_LINE_LENGTH) {
                 throw new Error("IPC Pipe line length exceeded max limit.");
             }
-        } catch (e) {
-            return null;
+            if (isDeno) {
+                resultBuffer.set(readBuffer.subarray(bufferOffset, lineEnd), resultOffset);
+            } else {
+                (resultBuffer as Buffer).copy(readBuffer, resultOffset, bufferOffset, lineEnd);
+            }
+            resultOffset += lineLength;
+            bufferOffset = lineEnd + 1;
+            break;
         }
+        
+        const availableLength = bufferLength - bufferOffset;
+        if (resultOffset + availableLength > MAX_LINE_LENGTH) {
+            throw new Error("IPC Pipe line length exceeded max limit.");
+        }
+        if (isDeno) {
+            resultBuffer.set(readBuffer.subarray(bufferOffset, bufferLength), resultOffset);
+        } else {
+            (resultBuffer as Buffer).copy(readBuffer, resultOffset, bufferOffset, bufferLength);
+        }
+        resultOffset += availableLength;
+        bufferOffset = bufferLength;
     }
 
-    if (offset === 0) return '';
+    if (resultOffset === 0) return '';
     
     if (isDeno) {
-        return new TextDecoder().decode(readResultBuffer.subarray(0, offset));
+        return new TextDecoder().decode(resultBuffer.subarray(0, resultOffset));
     } else {
-        return (readResultBuffer as Buffer).toString('utf8', 0, offset);
+        return (resultBuffer as Buffer).toString('utf8', 0, resultOffset);
     }
 }
 
