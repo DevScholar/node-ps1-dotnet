@@ -40,6 +40,11 @@ node start.js examples/console/await-delay/await-delay.ts
 ```bat
 node start.js examples/winforms/counter/counter.ts
 ```
+### WinForms Drag Box App
+
+```bat
+node start.js examples/winforms/drag-box/drag-box.ts
+```
 ### WPF Counter App
 
 ```bat

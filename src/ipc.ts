@@ -4,50 +4,40 @@ import type { ProtocolResponse, CommandRequest } from './types.ts';
 
 declare const Deno: any;
 
+const MAX_LINE_LENGTH = 1024 * 1024 * 2; // 2MB buffer per line
+const isDeno = typeof Deno !== 'undefined';
+// Pre-allocate buffer to prevent memory thrashing on high-frequency IPC
+const readResultBuffer = isDeno ? new Uint8Array(MAX_LINE_LENGTH) : Buffer.alloc(MAX_LINE_LENGTH);
+const singleByteBuffer = isDeno ? new Uint8Array(1) : Buffer.alloc(1);
+
 export function readLineSync(fd: number): string | null {
-    const chunks: Buffer[] = [];
-    let totalLength = 0;
-    const isDeno = typeof Deno !== 'undefined';
+    let offset = 0;
+    
+    while (true) {
+        try {
+            const r = fs.readSync(fd, singleByteBuffer, 0, 1, null);
+            if (r === 0) {
+                if (offset === 0) return null;
+                break;
+            }
+            if (singleByteBuffer[0] === 10) break; // \n character
+            
+            readResultBuffer[offset++] = singleByteBuffer[0];
+            
+            if (offset >= MAX_LINE_LENGTH) {
+                throw new Error("IPC Pipe line length exceeded max limit.");
+            }
+        } catch (e) {
+            return null;
+        }
+    }
+
+    if (offset === 0) return '';
     
     if (isDeno) {
-        const buf = new Uint8Array(1);
-        const bytesData: number[] = [];
-        while (true) {
-            try {
-                const r = fs.readSync(fd, buf, 0, 1, null);
-                if (r === 0) {
-                    if (bytesData.length === 0) return null;
-                    break;
-                }
-                if (buf[0] === 10) break;
-                bytesData.push(buf[0]);
-            } catch (e) {
-                return null;
-            }
-        }
-        if (bytesData.length === 0) return '';
-        return new TextDecoder().decode(new Uint8Array(bytesData));
+        return new TextDecoder().decode(readResultBuffer.subarray(0, offset));
     } else {
-        const buf = Buffer.alloc(1);
-        while (true) {
-            try {
-                const r = fs.readSync(fd, buf, 0, 1, null);
-                if (r === 0) {
-                    if (chunks.length === 0) return null;
-                    break;
-                }
-                if (buf[0] === 10) break;
-                const chunk = Buffer.alloc(1);
-                buf.copy(chunk);
-                chunks.push(chunk);
-                totalLength += 1;
-            } catch (e) {
-                return null;
-            }
-        }
-        if (chunks.length === 0) return '';
-        const completeBuffer = Buffer.concat(chunks, totalLength);
-        return completeBuffer.toString('utf8');
+        return (readResultBuffer as Buffer).toString('utf8', 0, offset);
     }
 }
 
