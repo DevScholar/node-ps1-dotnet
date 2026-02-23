@@ -1,5 +1,5 @@
 {
-  "name": "node-ps1-dotnet",
+  "name": "@devscholar/node-ps1-dotnet",
   "version": "0.0.0",
   "description": "Node.js to .NET interop via IPC",
   "main": "dist/index.js",
