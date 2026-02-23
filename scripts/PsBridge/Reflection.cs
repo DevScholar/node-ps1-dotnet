@@ -1,6 +1,5 @@
 // scripts/PsBridge/Reflection.cs
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -10,7 +9,6 @@ using System.Threading.Tasks;
 
 public static class Reflection
 {
-    private static ConcurrentDictionary<Type, PropertyInfo[]> EventArgsPropsCache = new ConcurrentDictionary<Type, PropertyInfo[]>();
     public static Dictionary<string, object> InvokeReflectionLogic(Dictionary<string, object> cmd)
     {
         var action = cmd["action"].ToString();
@@ -165,57 +163,7 @@ public static class Reflection
                             }
                             else
                             {
-                                var converted = Protocol.ConvertToProtocol(arg);
-                                
-                                bool isEventArgs = false;
-                                var propsToInclude = new Dictionary<string, object>();
-                                
-                                try
-                                {
-                                    var typeName = arg.GetType().FullName;
-                                    isEventArgs = typeName.EndsWith("EventArgs") || 
-                                                  typeName.Contains("InitializationCompleted") ||
-                                                  typeName == "System.__ComObject";
-                                }
-                                catch { }
-                                
-                                if (isEventArgs)
-                                {
-                                    try
-                                    {
-                                        var argType = arg.GetType();
-                                        PropertyInfo[] members;
-                                        if (!EventArgsPropsCache.TryGetValue(argType, out members))
-                                        {
-                                            members = argType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-                                            EventArgsPropsCache[argType] = members;
-                                        }
-                                        
-                                        foreach (var member in members)
-                                        {
-                                            try
-                                            {
-                                                var val = member.GetValue(arg);
-                                                if (val != null && !(val is MarshalByRefObject))
-                                                {
-                                                    if (val is bool || val is string || val.GetType().IsPrimitive)
-                                                    {
-                                                        propsToInclude[member.Name] = val;
-                                                    }
-                                                }
-                                            }
-                                            catch { }
-                                        }
-                                    }
-                                    catch { }
-                                }
-                                
-                                if (propsToInclude.Count > 0)
-                                {
-                                    converted["props"] = propsToInclude;
-                                }
-                                
-                                protoArgs.Add(converted);
+                                protoArgs.Add(Protocol.ConvertToProtocol(arg));
                             }
                         }
                         

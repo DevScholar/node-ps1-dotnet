@@ -9,107 +9,6 @@ using System.Threading.Tasks;
 
 public static class Protocol
 {
-    public static Dictionary<string, object> GetComObjectProperties(object inputObject)
-    {
-        var props = new Dictionary<string, object>();
-        
-        Type type = null;
-        
-        if (inputObject is Type)
-        {
-            type = (Type)inputObject;
-        }
-        else
-        {
-            type = inputObject.GetType();
-        }
-        
-        bool isComObject = type.FullName == "System.__ComObject";
-        if (!isComObject)
-        {
-            var attrs = type.GetCustomAttributes(false);
-            foreach (var attr in attrs)
-            {
-                if (attr is ComVisibleAttribute)
-                {
-                    isComObject = true;
-                    break;
-                }
-            }
-        }
-        
-        if (isComObject && !(inputObject is Type))
-        {
-            props["__comType"] = type.FullName;
-            
-            var allProps = type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-            
-            foreach (var prop in allProps)
-            {
-                var indexParams = prop.GetIndexParameters();
-                
-                if (indexParams.Length == 0)
-                {
-                    try
-                    {
-                        var val = prop.GetValue(inputObject, null);
-                        
-                        if (val != null)
-                        {
-                            if (val is bool || val is string || val.GetType().IsPrimitive)
-                            {
-                                bool isValidValue = true;
-                                if (val is double || val is float)
-                                {
-                                    double dVal = Convert.ToDouble(val);
-                                    if (double.IsNaN(dVal) || double.IsInfinity(dVal))
-                                    {
-                                        isValidValue = false;
-                                    }
-                                }
-                                if (isValidValue)
-                                {
-                                    props[prop.Name] = val;
-                                }
-                            }
-                            else if (val.GetType().IsValueType)
-                            {
-                                string strVal = val.ToString();
-                                if (strVal != "NaN" && strVal != "Infinity" && strVal != "-Infinity")
-                                {
-                                    props[prop.Name] = val;
-                                }
-                            }
-                        }
-                    }
-                    catch { }
-                }
-                else
-                {
-                    var paramType = indexParams[0].ParameterType;
-                    if (paramType == typeof(string))
-                    {
-                        var invoker = typeof(PropertyInfo).GetMethod("get_Item", BindingFlags.Public | BindingFlags.Instance, null, new Type[] { typeof(string) }, null);
-                        if (invoker != null)
-                        {
-                            try
-                            {
-                                var val = invoker.Invoke(inputObject, new object[] { "AdditionalArgs" });
-                                if (val != null)
-                                {
-                                    props["AdditionalArgs"] = val;
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-                }
-            }
-        }
-        
-        return props;
-    }
-
     public static Dictionary<string, object> ConvertToProtocol(object inputObject)
     {
         if (inputObject == null)
@@ -162,60 +61,12 @@ public static class Protocol
         var objRefId = Guid.NewGuid().ToString();
         BridgeState.ObjectStore[objRefId] = inputObject;
         
-        var result = new Dictionary<string, object>
+        return new Dictionary<string, object>
         {
             { "type", "ref" },
             { "id", objRefId },
             { "netType", inputObject.GetType().FullName }
         };
-        
-        var comProps = GetComObjectProperties(inputObject);
-        if (comProps.Count > 0)
-        {
-            result["props"] = comProps;
-        }
-        
-        if (inputObject != null && inputObject.GetType().IsValueType && !inputObject.GetType().IsPrimitive && inputObject.GetType() != typeof(string))
-        {
-            var structProps = new Dictionary<string, object>();
-            var properties = inputObject.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
-            foreach (var prop in properties)
-            {
-                if (prop.PropertyType.IsPrimitive || prop.PropertyType == typeof(double) || prop.PropertyType == typeof(string) || prop.PropertyType == typeof(int) || prop.PropertyType == typeof(float))
-                {
-                    try {
-                        var val = prop.GetValue(inputObject);
-                        if (val != null)
-                        {
-                            if (val is double || val is float)
-                            {
-                                double dVal = Convert.ToDouble(val);
-                                if (double.IsNaN(dVal) || double.IsInfinity(dVal))
-                                {
-                                    continue;
-                                }
-                            }
-                            structProps[prop.Name] = val;
-                        }
-                    } catch { }
-                }
-            }
-            
-            if (structProps.Count > 0)
-            {
-                if (result.ContainsKey("props"))
-                {
-                    var existingProps = (Dictionary<string, object>)result["props"];
-                    foreach(var kv in structProps) existingProps[kv.Key] = kv.Value;
-                }
-                else
-                {
-                    result["props"] = structProps;
-                }
-            }
-        }
-        
-        return result;
     }
 
     public static object[] ResolveArgs(object argsObj)

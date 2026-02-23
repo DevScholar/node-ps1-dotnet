@@ -18,22 +18,27 @@ public static class PsHost
 
     public static object RunProcessNestedCommands()
     {
+        var queues = new BlockingCollection<Dictionary<string, object>>[] { ReplyQueue, CommandQueue };
+        
         while (BridgeState.PipeServer != null && BridgeState.PipeServer.IsConnected)
         {
-            Dictionary<string, object> reply;
-            if (ReplyQueue.TryTake(out reply, 10))
+            Dictionary<string, object> item;
+            int index = BlockingCollection<Dictionary<string, object>>.TakeFromAny(queues, out item);
+
+            if (index == 0)
             {
-                if (reply != null && reply.ContainsKey("result"))
+                if (item != null && item.ContainsKey("result"))
                 {
-                    return reply["result"];
+                    return item["result"];
                 }
                 return null;
             }
-
-            Dictionary<string, object> cmd;
-            if (CommandQueue.TryTake(out cmd, 5))
+            else if (index == 1)
             {
-                ExecuteCommand(cmd);
+                if (item != null)
+                {
+                    ExecuteCommand(item);
+                }
             }
         }
         return null;
