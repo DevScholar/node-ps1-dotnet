@@ -175,6 +175,46 @@ public static class Protocol
             result["props"] = comProps;
         }
         
+        if (inputObject != null && inputObject.GetType().IsValueType && !inputObject.GetType().IsPrimitive && inputObject.GetType() != typeof(string))
+        {
+            var structProps = new Dictionary<string, object>();
+            var properties = inputObject.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            foreach (var prop in properties)
+            {
+                if (prop.PropertyType.IsPrimitive || prop.PropertyType == typeof(double) || prop.PropertyType == typeof(string) || prop.PropertyType == typeof(int) || prop.PropertyType == typeof(float))
+                {
+                    try {
+                        var val = prop.GetValue(inputObject);
+                        if (val != null)
+                        {
+                            if (val is double || val is float)
+                            {
+                                double dVal = Convert.ToDouble(val);
+                                if (double.IsNaN(dVal) || double.IsInfinity(dVal))
+                                {
+                                    continue;
+                                }
+                            }
+                            structProps[prop.Name] = val;
+                        }
+                    } catch { }
+                }
+            }
+            
+            if (structProps.Count > 0)
+            {
+                if (result.ContainsKey("props"))
+                {
+                    var existingProps = (Dictionary<string, object>)result["props"];
+                    foreach(var kv in structProps) existingProps[kv.Key] = kv.Value;
+                }
+                else
+                {
+                    result["props"] = structProps;
+                }
+            }
+        }
+        
         return result;
     }
 
