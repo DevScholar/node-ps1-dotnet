@@ -14,52 +14,21 @@ This is a project that mimics the [Node API for .NET](https://github.com/microso
 
 # Examples
 
-You can use the `--runtime=[node|deno|bun]` option to specify the runtime. For example:
+Please visit the [node-ps1-dotnet-examples](https://github.com/devscholar/node-ps1-dotnet-examples) repository for working examples.
 
-```bat
-node start.js examples/console/console-input/console-input.ts --runtime=deno
+## Quick Start with Examples
+
+Clone the examples repository alongside this project:
+
+```bash
+git clone https://github.com/devscholar/node-ps1-dotnet-examples.git
+cd node-ps1-dotnet-examples
+npm install
+npm run winforms-counter
 ```
 
-## Console Apps
+For more examples and details, see the [node-ps1-dotnet-examples README](https://github.com/devscholar/node-ps1-dotnet-examples).
 
-### Console Input App
-
-```bat
-node start.js examples/console/console-input/console-input.ts
-```
-### Await Delay App
-
-```bat
-node start.js examples/console/await-delay/await-delay.ts
-```
-
-## GUI Apps
-
-### WinForms Counter App
-
-```bat
-node start.js examples/winforms/counter/counter.ts
-```
-### WinForms Drag Box App
-
-```bat
-node start.js examples/winforms/drag-box/drag-box.ts
-```
-### WPF Counter App
-
-```bat
-node start.js examples/wpf/counter/counter.ts
-```
-### WPF Drag Box App
-
-```bat
-node start.js examples/wpf/drag-box/drag-box.ts
-```
-### WPF WebView2 Browser
-
-```bat
-node start.js examples/wpf/webview2-browser/webview2-browser.ts
-```
 # License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE.md) file for details.
