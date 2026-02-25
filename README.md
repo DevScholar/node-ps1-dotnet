@@ -16,18 +16,6 @@ This is a project that mimics the [Node API for .NET](https://github.com/microso
 
 Please visit the [node-ps1-dotnet-examples](https://github.com/devscholar/node-ps1-dotnet-examples) repository for working examples.
 
-## Quick Start with Examples
-
-Clone the examples repository alongside this project:
-
-```bash
-git clone https://github.com/devscholar/node-ps1-dotnet-examples.git
-cd node-ps1-dotnet-examples
-npm install
-npm run winforms-counter
-```
-
-For more examples and details, see the [node-ps1-dotnet-examples README](https://github.com/devscholar/node-ps1-dotnet-examples).
 
 # License
 
