@@ -458,8 +458,76 @@ function createNamespaceProxy(assemblyName: string) {
     return new Proxy({}, {
         get: (target: any, prop: string) => {
             if (typeof prop !== 'string') return undefined;
-            if (prop === 'then') return undefined; // 处理 Promise 检查
-            return node_ps1_dotnet._load(`${assemblyName}.${prop}`);
+            if (prop === 'then') return undefined;
+            
+            const fullName = `${assemblyName}.${prop}`;
+            const loaded = node_ps1_dotnet._load(fullName);
+            
+            // 检查 loaded 是否是类型代理（有有效的 __ref 字符串）
+            let typeId: string | null = null;
+            try {
+                const ref = loaded.__ref;
+                if (typeof ref === 'string' && ref.length > 0) {
+                    typeId = ref;
+                }
+            } catch {}
+            
+            if (typeId) {
+                return new Proxy({}, {
+                    get: (target2: any, prop2: string) => {
+                        if (typeof prop2 !== 'string') return undefined;
+                        
+                        if (prop2 === '__ref') {
+                            return typeId;
+                        }
+                        
+                        if (prop2 === 'value__') {
+                            try {
+                                const res = ipc!.send({ action: 'Invoke', targetId: typeId, methodName: prop2, args: [] });
+                                if (res && res.type === 'primitive') {
+                                    return res.value;
+                                }
+                            } catch {}
+                            return 0;
+                        }
+                        
+                        try {
+                            const res = ipc!.send({ action: 'Invoke', targetId: typeId, methodName: prop2, args: [] });
+                            if (res) {
+                                if (res.type === 'primitive') {
+                                    return res.value;
+                                }
+                                if (res.type === 'ref') {
+                                    // 检查是否是枚举值 - 尝试获取 value__ 字段
+                                    try {
+                                        const valueRes = ipc!.send({ action: 'Invoke', targetId: res.id, methodName: 'value__', args: [] });
+                                        if (valueRes && valueRes.type === 'primitive') {
+                                            // 这是一个枚举值，返回数字
+                                            return valueRes.value;
+                                        }
+                                    } catch {
+                                        // 不是枚举，返回代理
+                                    }
+                                    return createProxy(res);
+                                }
+                            }
+                        } catch {}
+                        
+                        return (...args: any[]) => {
+                            const netArgs = args.map((a: any) => {
+                                if (a && a.__ref) return { __ref: a.__ref };
+                                return a;
+                            });
+                            const res = ipc!.send({ action: 'Invoke', targetId: typeId, methodName: prop2, args: netArgs });
+                            return createProxy(res);
+                        };
+                    },
+                    set: () => false,
+                    apply: () => { throw new Error("Cannot call .NET enum as function"); }
+                });
+            }
+            
+            return loaded;
         }
     });
 }
