@@ -3,8 +3,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as cp from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { getPowerShellPath } from './utils.ts';
-import { IpcSync } from './ipc.ts';
+import { getPowerShellPath } from './utils.js';
+import { IpcSync } from './ipc.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -281,7 +281,8 @@ function createLazyArray(arr: any[]): any {
             if (prop === 'map' || prop === 'filter' || prop === 'forEach' || prop === 'reduce') {
                 return (...args: any[]) => {
                     const transformed = target.map((item: any) => createProxy(item));
-                    return transformed[prop](...args);
+                    const method = (transformed as any)[prop];
+                    return method.call(transformed, ...args);
                 };
             }
             if (prop === 'slice') {

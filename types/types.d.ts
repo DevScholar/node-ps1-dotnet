@@ -1,4 +1,3 @@
-// src/types.ts
 export interface ProtocolResponse {
     type: string;
     value?: any;
@@ -16,7 +15,6 @@ export interface ProtocolResponse {
     typeName?: string;
     members?: Record<string, string>;
 }
-
 export interface CommandRequest {
     action: string;
     [key: string]: any;
