@@ -1,3 +1,5 @@
+export declare const __filename: string;
+export declare const __dirname: string;
 export declare const node_ps1_dotnet: {
     _load(typeName: string): any;
     _release(id: string): void;

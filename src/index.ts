@@ -1,54 +1,41 @@
-// src/index.ts
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as cp from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getPowerShellPath } from './utils.js';
 import { IpcSync } from './ipc.js';
+import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.js';
+import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet } from './proxy.js';
+import { createNamespaceProxy, createExportNamespaceProxy } from './namespace.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const gcRegistry = new FinalizationRegistry((id: string) => {
-    try { node_ps1_dotnet._release(id); } catch {}
-});
-
-const callbackRegistry = new Map<string, Function>();
-const typeMetadataCache = new Map<string, Map<string, string>>();
-const globalTypeCache = new Map<string, Map<string, string>>();
-const pendingInspectRequests = new Map<string, string[]>();
-const pendingInspectTimeout = new Map<string, NodeJS.Timeout>();
-
-let ipc: IpcSync | null = null;
-let proc: cp.ChildProcess | null = null;
-let initialized = false;
-let cachedRuntimeInfo: { frameworkMoniker: string; runtimeVersion: string } | null = null;
+export const __filename = fileURLToPath(import.meta.url);
+export const __dirname = path.dirname(__filename);
 
 function cleanup() {
-    if (!initialized) return;
-    initialized = false;
+    if (!getInitialized()) return;
+    setInitialized(false);
     
+    const ipc = getIpc();
     if (ipc) {
         try {
             ipc.close();
         } catch {}
     }
     
+    const proc = getProc();
     if (proc && !proc.killed) {
         try {
-            // Windows 下强制杀死进程，防止标准流卡死 Node.js 的事件循环
             proc.kill('SIGKILL');
         } catch {}
     }
     
-    proc = null;
-    ipc = null;
+    setProc(null);
+    setIpc(null);
 }
 
-function initialize() {
-    if (initialized) return;
+function doInitialize() {
+    if (getInitialized()) return;
     
-    // Check if running on Windows
     if (process.platform !== 'win32') {
         throw new Error('node-ps1-dotnet is only supported on Windows. Use node-with-gjs for Linux/macOS.');
     }
@@ -61,20 +48,18 @@ function initialize() {
     }
 
     const powerShellPath = getPowerShellPath();
-    proc = cp.spawn(powerShellPath, [
+    const proc = cp.spawn(powerShellPath, [
         '-NoProfile', '-ExecutionPolicy', 'Bypass',
         '-Command', `& '${scriptPath}' -PipeName '${pipeName}'`
     ], { stdio: 'inherit', windowsHide: false });
 
-    // 让子进程尽量不阻止 Node.js 退出
+    setProc(proc);
     proc.unref();
 
     proc.on('exit', (code) => {
         process.exit(0);
     });
 
-    // 修复脚本跑完后无法停机卡死的 Bug：
-    // 当 V8 执行到底，事件循环清空时，触发 beforeExit -> 强杀子进程并立刻退出
     process.on('beforeExit', () => {
         cleanup();
         process.exit(0); 
@@ -100,7 +85,7 @@ function initialize() {
         process.exit(1);
     });
 
-    ipc = new IpcSync(pipeName, (res: any) => {
+    const ipc = new IpcSync(pipeName, (res: any) => {
         const cb = callbackRegistry.get(res.callbackId!);
         if (cb) {
             const wrappedArgs = (res.args || []).map((arg: any) => {
@@ -115,324 +100,27 @@ function initialize() {
     });
 
     ipc.connect();
-    initialized = true;
-}
-
-const typeNameCache = new Map<string, string>();
-
-function getObjectTypeName(id: string): string | null {
-    if (typeNameCache.has(id)) {
-        return typeNameCache.get(id)!;
-    }
-    try {
-        const res = ipc!.send({ action: 'GetTypeName', targetId: id });
-        if (res && res.typeName) {
-            typeNameCache.set(id, res.typeName);
-            return res.typeName;
-        }
-    } catch {}
-    return null;
-}
-
-function getTypeMembers(typeName: string, memberNames: string[]): Map<string, string> | null {
-    if (globalTypeCache.has(typeName)) {
-        const cached = globalTypeCache.get(typeName)!;
-        const result = new Map<string, string>();
-        let allFound = true;
-        for (const name of memberNames) {
-            if (cached.has(name)) {
-                result.set(name, cached.get(name)!);
-            } else {
-                allFound = false;
-            }
-        }
-        if (allFound) return result;
-    }
-
-    try {
-        const res = ipc!.send({ action: 'InspectType', typeName, memberNames });
-        if (res && res.members) {
-            if (!globalTypeCache.has(typeName)) {
-                globalTypeCache.set(typeName, new Map());
-            }
-            const cache = globalTypeCache.get(typeName)!;
-            for (const [name, type] of Object.entries(res.members as Record<string, string>)) {
-                cache.set(name, type);
-            }
-            return new Map(Object.entries(res.members as Record<string, string>));
-        }
-    } catch {}
-    return null;
-}
-
-function ensureMemberTypeCached(id: string, memberName: string, memberCache: Map<string, string>) {
-    if (memberCache.has(memberName)) return;
-
-    const typeName = getObjectTypeName(id);
-    if (typeName) {
-        const members = getTypeMembers(typeName, [memberName]);
-        if (members && members.has(memberName)) {
-            memberCache.set(memberName, members.get(memberName)!);
-            return;
-        }
-    }
-
-    try {
-        const inspectRes = ipc!.send({ action: 'Inspect', targetId: id, memberName });
-        memberCache.set(memberName, inspectRes.memberType);
-    } catch {
-        memberCache.set(memberName, 'method');
-    }
-}
-
-function createProxyWithInlineProps(meta: any): any {
-    if (meta.type !== 'ref') return createProxy(meta);
-
-    const id = meta.id!;
-    const inlineProps = meta.props || {};
-
-    if (!typeMetadataCache.has(id)) {
-        typeMetadataCache.set(id, new Map());
-    }
-    const memberCache = typeMetadataCache.get(id)!;
-
-    class Stub {}
-
-    const proxy = new Proxy(Stub, {
-        get: (target: any, prop: string) => {
-            if (prop === '__ref') return id;
-            if (prop === '__inlineProps') return inlineProps;
-            if (typeof prop !== 'string') return undefined;
-
-            if (inlineProps.hasOwnProperty(prop)) {
-                memberCache.set(prop, 'property');
-                return inlineProps[prop];
-            }
-
-            if (prop.startsWith('add_')) {
-                const eventName = prop.substring(4);
-                return (callback: Function) => {
-                    const cbId = `cb_${Date.now()}_${Math.random()}`;
-                    callbackRegistry.set(cbId, callback);
-                    ipc!.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
-                };
-            }
-
-            let memType = memberCache.get(prop);
-
-            if (!memType) {
-                ensureMemberTypeCached(id, prop, memberCache);
-                memType = memberCache.get(prop);
-            }
-
-            if (memType === 'property') {
-                const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [] });
-                return createProxy(res);
-            } else {
-                return (...args: any[]) => {
-                    const netArgs = args.map((a: any) => {
-                        if (a && a.__ref) return { __ref: a.__ref };
-                        if (typeof a === 'function') {
-                            const cbId = `cb_arg_${Date.now()}_${Math.random()}`;
-                            callbackRegistry.set(cbId, a);
-                            return { type: 'callback', callbackId: cbId };
-                        }
-                        return a;
-                    });
-                    const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: netArgs });
-                    return createProxy(res);
-                };
-            }
-        },
-
-        set: (target: any, prop: string, value: any) => {
-            if (typeof prop !== 'string') return false;
-            const netArg = (value && value.__ref) ? { __ref: value.__ref } : value;
-            ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [netArg] });
-            memberCache.set(prop, 'property');
-            return true;
-        },
-
-        construct: (target: any, args: any[]) => {
-            const netArgs = args.map((a: any) => {
-                if (a && a.__ref) return { __ref: a.__ref };
-                if (typeof a === 'function') {
-                    const cbId = `cb_ctor_${Date.now()}_${Math.random()}`;
-                    callbackRegistry.set(cbId, a);
-                    return { type: 'callback', callbackId: cbId };
-                }
-                return a;
-            });
-            const res = ipc!.send({ action: 'New', typeId: id, args: netArgs });
-            return createProxy(res);
-        },
-
-        apply: () => { throw new Error("Cannot call .NET object as a function. Need 'new'?"); }
-    });
-
-    gcRegistry.register(proxy, id);
-    return proxy;
-}
-
-function createLazyArray(arr: any[]): any {
-    return new Proxy(arr, {
-        get(target, prop) {
-            if (typeof prop === 'symbol') return target[prop];
-            const index = Number(prop);
-            if (!isNaN(index) && index >= 0 && index < target.length) {
-                return createProxy(target[index]);
-            }
-            if (prop === 'length') return target.length;
-            if (prop === 'map' || prop === 'filter' || prop === 'forEach' || prop === 'reduce') {
-                return (...args: any[]) => {
-                    const transformed = target.map((item: any) => createProxy(item));
-                    const method = (transformed as any)[prop];
-                    return method.call(transformed, ...args);
-                };
-            }
-            if (prop === 'slice') {
-                return (...args: any[]) => {
-                    const sliced = target.slice(...args);
-                    return sliced.map((item: any) => createProxy(item));
-                };
-            }
-            return undefined;
-        }
-    });
-}
-
-const LARGE_ARRAY_THRESHOLD = 50;
-
-function createProxy(meta: any): any {
-    if (meta.type === 'primitive' || meta.type === 'null') return meta.value;
-
-    if (meta.type === 'array') {
-        const arr = meta.value;
-        if (arr.length <= LARGE_ARRAY_THRESHOLD) {
-            return arr.map((item: any) => createProxy(item));
-        }
-        return createLazyArray(arr);
-    }
-
-    if (meta.type === 'task') {
-        const taskId = meta.id;
-        return new Promise((resolve, reject) => {
-            try {
-                const res = ipc!.send({ action: 'AwaitTask', taskId: taskId });
-                resolve(createProxy(res));
-            } catch (e) {
-                reject(e);
-            } finally {
-                try { ipc!.send({ action: 'Release', targetId: taskId }); } catch {}
-            }
-        });
-    }
-
-    if (meta.type === 'namespace') {
-        const nsName = meta.value;
-        return new Proxy({}, {
-            get: (target: any, prop: string) => {
-                if (typeof prop !== 'string') return undefined;
-                return node_ps1_dotnet._load(`${nsName}.${prop}`);
-            }
-        });
-    }
-
-    if (meta.type !== 'ref') return null;
-
-    const id = meta.id!;
-
-    if (!typeMetadataCache.has(id)) {
-        typeMetadataCache.set(id, new Map());
-    }
-    const memberCache = typeMetadataCache.get(id)!;
-
-    class Stub {}
-
-    const proxy = new Proxy(Stub, {
-        get: (target: any, prop: string) => {
-            if (prop === '__ref') return id;
-            if (typeof prop !== 'string') return undefined;
-
-            if (prop.startsWith('add_')) {
-                const eventName = prop.substring(4);
-                return (callback: Function) => {
-                    const cbId = `cb_${Date.now()}_${Math.random()}`;
-                    callbackRegistry.set(cbId, callback);
-                    ipc!.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
-                };
-            }
-
-            let memType = memberCache.get(prop);
-
-            if (!memType) {
-                ensureMemberTypeCached(id, prop, memberCache);
-                memType = memberCache.get(prop);
-            }
-
-            if (memType === 'property') {
-                const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [] });
-                return createProxy(res);
-            } else {
-                return (...args: any[]) => {
-                    const netArgs = args.map((a: any) => {
-                        if (a && a.__ref) return { __ref: a.__ref };
-                        if (typeof a === 'function') {
-                            const cbId = `cb_arg_${Date.now()}_${Math.random()}`;
-                            callbackRegistry.set(cbId, a);
-                            return { type: 'callback', callbackId: cbId };
-                        }
-                        return a;
-                    });
-                    const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: netArgs });
-                    return createProxy(res);
-                };
-            }
-        },
-
-        set: (target: any, prop: string, value: any) => {
-            if (typeof prop !== 'string') return false;
-            const netArg = (value && value.__ref) ? { __ref: value.__ref } : value;
-            ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [netArg] });
-            memberCache.set(prop, 'property');
-            return true;
-        },
-
-        construct: (target: any, args: any[]) => {
-            const netArgs = args.map((a: any) => {
-                if (a && a.__ref) return { __ref: a.__ref };
-                if (typeof a === 'function') {
-                    const cbId = `cb_ctor_${Date.now()}_${Math.random()}`;
-                    callbackRegistry.set(cbId, a);
-                    return { type: 'callback', callbackId: cbId };
-                }
-                return a;
-            });
-            const res = ipc!.send({ action: 'New', typeId: id, args: netArgs });
-            return createProxy(res);
-        },
-
-        apply: () => { throw new Error("Cannot call .NET object as a function. Need 'new'?"); }
-    });
-
-    gcRegistry.register(proxy, id);
-    return proxy;
+    setIpc(ipc);
+    setInitialized(true);
 }
 
 export const node_ps1_dotnet = {
     _load(typeName: string): any {
-        initialize();
+        doInitialize();
+        const ipc = getIpc();
         const res = ipc!.send({ action: 'GetType', typeName });
         return createProxy(res);
     },
 
     _release(id: string) {
+        const ipc = getIpc();
         if (ipc) {
             try { ipc!.send({ action: 'Release', targetId: id }); } catch {}
         }
     },
 
     _close() {
+        const proc = getProc();
         if (proc) proc.kill();
         cleanup();
     },
@@ -442,121 +130,27 @@ export const node_ps1_dotnet = {
     },
 
     _loadAssembly(assemblyName: string): any {
-        initialize();
+        doInitialize();
+        const ipc = getIpc();
         const res = ipc!.send({ action: 'LoadAssembly', assemblyName });
         return createProxy(res);
     },
 
     _getRuntimeInfo(): { frameworkMoniker: string; runtimeVersion: string } {
-        if (cachedRuntimeInfo) return cachedRuntimeInfo;
-        initialize();
+        if (getCachedRuntimeInfo()) return getCachedRuntimeInfo()!;
+        doInitialize();
+        const ipc = getIpc();
         const res = ipc!.send({ action: 'GetRuntimeInfo' });
-        cachedRuntimeInfo = {
+        const info = {
             frameworkMoniker: res.frameworkMoniker || 'netstandard2.0',
             runtimeVersion: res.runtimeVersion || '0.0.0'
         };
-        return cachedRuntimeInfo;
+        setCachedRuntimeInfo(info);
+        return info;
     }
 };
 
-function createNamespaceProxy(assemblyName: string) {
-    return new Proxy({}, {
-        get: (target: any, prop: string) => {
-            if (typeof prop !== 'string') return undefined;
-            if (prop === 'then') return undefined;
-            
-            const fullName = `${assemblyName}.${prop}`;
-            const loaded = node_ps1_dotnet._load(fullName);
-            
-            // 检查 loaded 是否是类型代理（有有效的 __ref 字符串）
-            let typeId: string | null = null;
-            try {
-                const ref = loaded.__ref;
-                if (typeof ref === 'string' && ref.length > 0) {
-                    typeId = ref;
-                }
-            } catch {}
-            
-            if (typeId) {
-                return new Proxy({}, {
-                    get: (target2: any, prop2: string) => {
-                        if (typeof prop2 !== 'string') return undefined;
-                        
-                        if (prop2 === '__ref') {
-                            return typeId;
-                        }
-                        
-                        if (prop2 === 'value__') {
-                            try {
-                                const res = ipc!.send({ action: 'Invoke', targetId: typeId, methodName: prop2, args: [] });
-                                if (res && res.type === 'primitive') {
-                                    return res.value;
-                                }
-                            } catch {}
-                            return 0;
-                        }
-                        
-                        try {
-                            const res = ipc!.send({ action: 'Invoke', targetId: typeId, methodName: prop2, args: [] });
-                            if (res) {
-                                if (res.type === 'primitive') {
-                                    return res.value;
-                                }
-                                if (res.type === 'ref') {
-                                    // 检查是否是枚举值 - 尝试获取 value__ 字段
-                                    try {
-                                        const valueRes = ipc!.send({ action: 'Invoke', targetId: res.id, methodName: 'value__', args: [] });
-                                        if (valueRes && valueRes.type === 'primitive') {
-                                            // 这是一个枚举值，返回数字
-                                            return valueRes.value;
-                                        }
-                                    } catch {
-                                        // 不是枚举，继续检查
-                                    }
-                                    
-                                    // 检查是否是结构体值类型 - 尝试获取 GetHashCode 或 ToString
-                                    try {
-                                        const typeNameRes = ipc!.send({ action: 'GetTypeName', targetId: res.id });
-                                        const typeName = typeNameRes?.typeName || '';
-                                        
-                                        // 如果是结构体，尝试获取其值
-                                        if (typeName && !typeName.startsWith('System.')) {
-                                            // 尝试 GetHashCode 来获取结构体的值
-                                            try {
-                                                const hashRes = ipc!.send({ action: 'Invoke', targetId: res.id, methodName: 'GetHashCode', args: [] });
-                                                if (hashRes && hashRes.type === 'primitive') {
-                                                    // 返回一个包含值和原始引用的对象
-                                                    const proxy = createProxy(res);
-                                                    (proxy as any).__value = hashRes.value;
-                                                    return proxy;
-                                                }
-                                            } catch {}
-                                        }
-                                    } catch {}
-                                    
-                                    return createProxy(res);
-                                }
-                            }
-                        } catch {}
-                        
-                        return (...args: any[]) => {
-                            const netArgs = args.map((a: any) => {
-                                if (a && a.__ref) return { __ref: a.__ref };
-                                return a;
-                            });
-                            const res = ipc!.send({ action: 'Invoke', targetId: typeId, methodName: prop2, args: netArgs });
-                            return createProxy(res);
-                        };
-                    },
-                    set: () => false,
-                    apply: () => { throw new Error("Cannot call .NET enum as function"); }
-                });
-            }
-            
-            return loaded;
-        }
-    });
-}
+setNodePs1Dotnet(() => node_ps1_dotnet);
 
 const dotnetProxy = new Proxy(function() {} as any, {
     get: (target: any, prop: string) => {
@@ -572,51 +166,29 @@ const dotnetProxy = new Proxy(function() {} as any, {
             return node_ps1_dotnet._getRuntimeInfo().runtimeVersion;
         }
         if (prop === '__inspect') {
+            const ipc = getIpc();
             return (targetId: string, memberName: string) => ipc!.send({ action: 'Inspect', targetId, memberName });
         }
         return node_ps1_dotnet._load(prop);
     },
     apply: (target: any, argArray: any[], newTarget: any) => {
-        return createNamespaceProxy(argArray[0]);
+        return createNamespaceProxy(argArray[0], node_ps1_dotnet);
     }
 });
 
-function createExportNamespaceProxy(namespacePrefix: string): any {
-    const cache = new Map<string, any>();
-    
-    return new Proxy({} as any, {
-        get: (target: any, prop: string) => {
-            if (typeof prop !== 'string') return undefined;
-            if (prop === 'then') return undefined;
-            
-            const fullName = `${namespacePrefix}.${prop}`;
-            if (cache.has(fullName)) {
-                return cache.get(fullName);
-            }
-            
-            const result = node_ps1_dotnet._load(fullName);
-            cache.set(fullName, result);
-            return result;
-        }
-    });
-}
-
 export default dotnetProxy;
 
-// Use getters for namespace exports to delay initialization until first access
-// This allows the module to be imported on non-Windows platforms without errors
-// (as long as the exports are not actually used)
 let _System: any;
 export function getSystem(): any {
     if (!_System) {
-        _System = createExportNamespaceProxy('System');
+        _System = createExportNamespaceProxy('System', node_ps1_dotnet);
     }
     return _System;
 }
 
-// For backward compatibility, also export a lazy proxy
 export const System = new Proxy({} as any, {
     get: (target: any, prop: string) => {
+        if (prop === 'then') return undefined;
         return getSystem()[prop];
     }
 });
