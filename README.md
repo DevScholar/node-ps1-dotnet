@@ -20,8 +20,6 @@ Please visit the [node-ps1-dotnet-examples](https://github.com/devscholar/node-p
 
 Please visit the [testing.md](docs/testing.md) file for testing instructions.
 
-
-
 # License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE.md) file for details.
