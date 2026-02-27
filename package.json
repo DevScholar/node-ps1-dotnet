@@ -8,14 +8,25 @@
     ".": "./dist/index.js"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
     "build": "tsc"
   },
-  "keywords": ["dotnet", "winforms", "interop", "bridge", "ipc"],
+  "keywords": [
+    "dotnet",
+    "winforms",
+    "interop",
+    "bridge",
+    "ipc"
+  ],
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/node": "^25.0.10",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.6",
     "typescript": "^5.9.3"
   }
 }
