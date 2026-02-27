@@ -380,6 +380,20 @@ public static class Reflection
                                 var intValue = value is long ? (int)(long)value : (int)value;
                                 value = Enum.ToObject(prop.PropertyType, intValue);
                             }
+                            else if (prop.PropertyType.IsValueType && !prop.PropertyType.IsPrimitive)
+                            {
+                                // Handle structs like FontWeight - try to create from integer
+                                var intValue = value is long ? (int)(long)value : (int)value;
+                                var ctor = prop.PropertyType.GetConstructor(new[] { typeof(int) });
+                                if (ctor != null)
+                                {
+                                    value = ctor.Invoke(new object[] { intValue });
+                                }
+                                else if (value is IConvertible)
+                                {
+                                    value = Convert.ChangeType(value, prop.PropertyType);
+                                }
+                            }
                             else if (value is IConvertible)
                             {
                                 value = Convert.ChangeType(value, prop.PropertyType);

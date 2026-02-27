@@ -48,6 +48,11 @@ function cleanup() {
 function initialize() {
     if (initialized) return;
     
+    // Check if running on Windows
+    if (process.platform !== 'win32') {
+        throw new Error('node-ps1-dotnet is only supported on Windows. Use node-with-gjs for Linux/macOS.');
+    }
+    
     const pipeName = `PsNode_${process.pid}_${Math.floor(Math.random() * 10000)}`;
     const scriptPath = path.join(__dirname, '..', 'scripts', 'PsHost.ps1');
 
@@ -506,8 +511,29 @@ function createNamespaceProxy(assemblyName: string) {
                                             return valueRes.value;
                                         }
                                     } catch {
-                                        // 不是枚举，返回代理
+                                        // 不是枚举，继续检查
                                     }
+                                    
+                                    // 检查是否是结构体值类型 - 尝试获取 GetHashCode 或 ToString
+                                    try {
+                                        const typeNameRes = ipc!.send({ action: 'GetTypeName', targetId: res.id });
+                                        const typeName = typeNameRes?.typeName || '';
+                                        
+                                        // 如果是结构体，尝试获取其值
+                                        if (typeName && !typeName.startsWith('System.')) {
+                                            // 尝试 GetHashCode 来获取结构体的值
+                                            try {
+                                                const hashRes = ipc!.send({ action: 'Invoke', targetId: res.id, methodName: 'GetHashCode', args: [] });
+                                                if (hashRes && hashRes.type === 'primitive') {
+                                                    // 返回一个包含值和原始引用的对象
+                                                    const proxy = createProxy(res);
+                                                    (proxy as any).__value = hashRes.value;
+                                                    return proxy;
+                                                }
+                                            } catch {}
+                                        }
+                                    } catch {}
+                                    
                                     return createProxy(res);
                                 }
                             }
@@ -576,4 +602,21 @@ function createExportNamespaceProxy(namespacePrefix: string): any {
 }
 
 export default dotnetProxy;
-export const System = createExportNamespaceProxy('System');
+
+// Use getters for namespace exports to delay initialization until first access
+// This allows the module to be imported on non-Windows platforms without errors
+// (as long as the exports are not actually used)
+let _System: any;
+export function getSystem(): any {
+    if (!_System) {
+        _System = createExportNamespaceProxy('System');
+    }
+    return _System;
+}
+
+// For backward compatibility, also export a lazy proxy
+export const System = new Proxy({} as any, {
+    get: (target: any, prop: string) => {
+        return getSystem()[prop];
+    }
+});

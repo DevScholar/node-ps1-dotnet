@@ -11,4 +11,5 @@ export declare const node_ps1_dotnet: {
 };
 declare const dotnetProxy: any;
 export default dotnetProxy;
+export declare function getSystem(): any;
 export declare const System: any;
