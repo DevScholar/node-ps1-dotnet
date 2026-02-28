@@ -20,7 +20,8 @@
     "webview2",
     "netfx",
     "deno",
-    "bun"
+    "bun",
+    "gui"
   ],
   "author": "",
   "license": "MIT",
