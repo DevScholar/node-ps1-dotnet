@@ -647,6 +647,25 @@ public static class Reflection
             return Protocol.ConvertToProtocol(asm);
         }
         
+        if (action == "LoadFrom")
+        {
+            var filePath = cmd["filePath"].ToString();
+            if (!File.Exists(filePath))
+            {
+                throw new Exception("File not found: " + filePath);
+            }
+            Assembly asm = null;
+            try
+            {
+                asm = Assembly.LoadFrom(filePath);
+            }
+            catch (Exception ex)
+            {
+                throw new Exception("Failed to load assembly from file: " + ex.Message);
+            }
+            return Protocol.ConvertToProtocol(asm);
+        }
+        
         if (action == "Release")
         {
             Protocol.RemoveBridgeObject(cmd["targetId"].ToString());

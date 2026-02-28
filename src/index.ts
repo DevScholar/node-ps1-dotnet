@@ -136,6 +136,13 @@ export const node_ps1_dotnet = {
         return createProxy(res);
     },
 
+    _loadFrom(filePath: string): any {
+        doInitialize();
+        const ipc = getIpc();
+        const res = ipc!.send({ action: 'LoadFrom', filePath });
+        return createProxy(res);
+    },
+
     _getRuntimeInfo(): { frameworkMoniker: string; runtimeVersion: string } {
         if (getCachedRuntimeInfo()) return getCachedRuntimeInfo()!;
         doInitialize();
@@ -158,6 +165,9 @@ const dotnetProxy = new Proxy(function() {} as any, {
         if (prop === 'then') return undefined;
         if (prop === 'load') return (assemblyNameOrFilePath: string) => {
             node_ps1_dotnet._loadAssembly(assemblyNameOrFilePath);
+        };
+        if (prop === 'loadFrom') return (filePath: string) => {
+            node_ps1_dotnet._loadFrom(filePath);
         };
         if (prop === 'frameworkMoniker') {
             return node_ps1_dotnet._getRuntimeInfo().frameworkMoniker;

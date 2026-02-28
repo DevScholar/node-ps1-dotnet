@@ -1,6 +1,6 @@
 {
   "name": "@devscholar/node-ps1-dotnet",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Node.js to .NET interop via IPC",
   "main": "./src/index.ts",
   "type": "module",
