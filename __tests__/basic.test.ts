@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals';
 
 describe('node-ps1-dotnet', () => {
   describe('utils', () => {

@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals';
 
 describe('IpcSync', () => {
   let IpcSync: any;
@@ -11,14 +10,14 @@ describe('IpcSync', () => {
 
   beforeEach(() => {
     mockFs = {
-      openSync: jest.fn(),
-      readSync: jest.fn(),
-      closeSync: jest.fn(),
+      openSync: vi.fn(),
+      readSync: vi.fn(),
+      closeSync: vi.fn(),
     };
   });
 
   it('should create an instance with pipe name and callback', () => {
-    const onEvent = jest.fn();
+    const onEvent = vi.fn();
     const ipc = new IpcSync('test_pipe', onEvent);
     
     expect(ipc).toBeDefined();
@@ -26,7 +25,7 @@ describe('IpcSync', () => {
   });
 
   it('should have connect, send, and close methods', () => {
-    const onEvent = jest.fn();
+    const onEvent = vi.fn();
     const ipc = new IpcSync('test_pipe', onEvent);
     
     expect(typeof ipc.connect).toBe('function');
@@ -35,7 +34,7 @@ describe('IpcSync', () => {
   });
 
   it('should throw error when connecting to nonexistent pipe', () => {
-    const onEvent = jest.fn();
+    const onEvent = vi.fn();
     const ipc = new IpcSync('nonexistent_pipe_12345', onEvent);
     
     expect(() => ipc.connect()).toThrow();

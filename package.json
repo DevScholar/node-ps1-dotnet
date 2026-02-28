@@ -8,9 +8,9 @@
     ".": "./dist/index.js"
   },
   "scripts": {
-    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
-    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
-    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "build": "tsc"
   },
   "keywords": [
@@ -23,10 +23,8 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@types/jest": "^30.0.0",
     "@types/node": "^25.0.10",
-    "jest": "^30.2.0",
-    "ts-jest": "^29.4.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.0.0"
   }
 }

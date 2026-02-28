@@ -1,5 +1,3 @@
-import { jest } from '@jest/globals';
-
 let cachedDotnet: any = null;
 let isInitialized = false;
 

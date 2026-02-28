@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals';
 
 const isWindows = process.platform === 'win32';
 
