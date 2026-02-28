@@ -21,7 +21,7 @@
     "ipc"
   ],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "devDependencies": {
     "@types/node": "^25.0.10",
     "typescript": "^5.9.3",
