@@ -1,4 +1,4 @@
-import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.js';
+import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.ts';
 
 export let node_ps1_dotnetGetter: (() => any) | null = null;
 

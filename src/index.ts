@@ -2,11 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as cp from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { getPowerShellPath } from './utils.js';
-import { IpcSync } from './ipc.js';
-import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.js';
-import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet } from './proxy.js';
-import { createNamespaceProxy, createExportNamespaceProxy } from './namespace.js';
+import { getPowerShellPath } from './utils.ts';
+import { IpcSync } from './ipc.ts';
+import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.ts';
+import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet } from './proxy.ts';
+import { createNamespaceProxy, createExportNamespaceProxy } from './namespace.ts';
 
 export const __filename = fileURLToPath(import.meta.url);
 export const __dirname = path.dirname(__filename);

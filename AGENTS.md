@@ -1,2 +1,2 @@
-When using TypeScript in Node, you must run TS with the `--experimental-transform-types` flag; other methods like `tsx` are not allowed, and transpilation is not allowed. The test framework should be Vitest, not Jest. ESM must be used instead of require.
+When using TypeScript in Node, you must run TS with the `--experimental-transform-types` flag; other methods like `tsx` are not allowed, and building and transpilation are not allowed, except Vite. The test framework should be Vitest, not Jest. ESM must be used instead of require.
 allowImportingTsExtensions should be true in tsconfig.json. (If this file exists)
