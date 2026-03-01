@@ -1,5 +1,5 @@
-import { getIpc } from './state.ts';
-import { createProxy } from './proxy.ts';
+import { getIpc } from './state.js';
+import { createProxy } from './proxy.js';
 
 export function createNamespaceProxy(assemblyName: string, dotnet: any) {
     return new Proxy({}, {

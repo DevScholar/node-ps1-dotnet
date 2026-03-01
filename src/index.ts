@@ -2,11 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as cp from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { getPowerShellPath } from './utils.ts';
-import { IpcSync } from './ipc.ts';
-import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.ts';
-import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet } from './proxy.ts';
-import { createNamespaceProxy, createExportNamespaceProxy } from './namespace.ts';
+import { getPowerShellPath } from './utils.js';
+import { IpcSync } from './ipc.js';
+import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.js';
+import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet } from './proxy.js';
+import { createNamespaceProxy, createExportNamespaceProxy } from './namespace.js';
 
 export const __filename = fileURLToPath(import.meta.url);
 export const __dirname = path.dirname(__filename);
@@ -49,9 +49,19 @@ function doInitialize() {
 
     const powerShellPath = getPowerShellPath();
     const proc = cp.spawn(powerShellPath, [
-        '-NoProfile', '-ExecutionPolicy', 'Bypass',
-        '-Command', `& '${scriptPath}' -PipeName '${pipeName}'`
-    ], { stdio: 'inherit', windowsHide: false });
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text',
+        '-Command', `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; chcp.com 65001 > $null; & '${scriptPath}' -PipeName '${pipeName}'`
+    ], { 
+        stdio: 'inherit', 
+        windowsHide: false,
+        env: { 
+            ...process.env, 
+            DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: '0',
+            DOTNET_SYSTEM_GLOBALIZATION_CULTURE: 'en-US',
+            DOTNET_UTF8_GLOBALIZATION: '1'
+        },
+        shell: false
+    });
 
     setProc(proc);
     proc.unref();

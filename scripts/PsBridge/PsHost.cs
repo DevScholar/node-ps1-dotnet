@@ -101,8 +101,9 @@ public static class PsHost
             BridgeState.PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         
         BridgeState.PipeServer.WaitForConnection();
-        BridgeState.Reader = new StreamReader(BridgeState.PipeServer);
-        BridgeState.Writer = new StreamWriter(BridgeState.PipeServer);
+        var utf8Encoding = new System.Text.UTF8Encoding(false);
+        BridgeState.Reader = new StreamReader(BridgeState.PipeServer, utf8Encoding);
+        BridgeState.Writer = new StreamWriter(BridgeState.PipeServer, utf8Encoding);
         BridgeState.Writer.AutoFlush = true;
 
         var readerThread = new Thread(() =>

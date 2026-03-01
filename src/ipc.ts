@@ -1,6 +1,6 @@
 // src/ipc.ts
 import * as fs from 'node:fs';
-import type { ProtocolResponse, CommandRequest } from './types.ts';
+import type { ProtocolResponse, CommandRequest } from './types.js';
 
 declare const Deno: any;
 

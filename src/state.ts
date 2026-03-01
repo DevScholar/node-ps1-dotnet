@@ -1,4 +1,4 @@
-import { IpcSync } from './ipc.ts';
+import { IpcSync } from './ipc.js';
 import * as cp from 'node:child_process';
 
 let _ipc: IpcSync | null = null;

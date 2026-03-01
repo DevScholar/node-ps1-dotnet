@@ -1,4 +1,4 @@
-// src/start.js
+// start.js - Build and run TypeScript files
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -12,7 +12,6 @@ let runtime = 'node';
 let tsFile = null;
 let extraArgs = [];
 
-// Parse arguments
 for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg.startsWith('--runtime=')) {
@@ -41,27 +40,66 @@ if (!fs.existsSync(filePath)) {
 }
 
 const runtimeFlags = {
-    node: ['--experimental-transform-types'],
+    node: [],
     bun: [],
     deno: ['run', '--allow-all', '--unstable-node-globals']
 };
 
-const runtimeArgs = runtimeFlags[runtime] || [];
-const runtimeCmd = runtime;
+async function buildAndRun() {
+    const tsFileDir = path.dirname(filePath);
+    
+    console.log('Building TypeScript in:', tsFileDir);
+    
+    const tscProc = spawn('npx', ['tsc', '-p', path.join(__dirname, 'tsconfig.json')], {
+        stdio: 'inherit',
+        cwd: __dirname,
+        shell: true
+    });
+    
+    await new Promise((resolve, reject) => {
+        tscProc.on('exit', (code) => {
+            if (code !== 0) {
+                console.error('Build failed with code:', code);
+                reject(new Error(`tsc exited with code ${code}`));
+            } else {
+                resolve();
+            }
+        });
+        tscProc.on('error', reject);
+    });
+    
+    console.log('Build complete. Running with', runtime, ':', tsFile);
+    
+    const ext = path.extname(tsFile);
+    const baseName = path.basename(tsFile, ext);
+    const relativePath = path.relative(path.join(__dirname, 'src'), filePath);
+    const jsFile = path.join(__dirname, 'dist', relativePath.replace(/\.ts$/, '.js'));
+    
+    const runtimeArgs = runtimeFlags[runtime] || [];
+    const runtimeCmd = runtime;
+    
+    const finalArgs = runtime === 'deno' 
+        ? [...runtimeArgs, jsFile, ...extraArgs]
+        : [...runtimeArgs, jsFile, ...extraArgs];
+    
+    const proc = spawn(runtimeCmd, finalArgs, {
+        stdio: 'inherit',
+        cwd: process.cwd(),
+        env: { ...process.env, DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: '0', CHARSET: 'UTF-8' },
+        shell: true
+    });
+    
+    proc.on('exit', (code) => {
+        process.exit(code);
+    });
+    
+    proc.on('error', (err) => {
+        console.error(`Failed to start ${runtime}:`, err.message);
+        process.exit(1);
+    });
+}
 
-console.log(`Running with ${runtime}: ${tsFile}`);
-
-const proc = spawn(runtimeCmd, [...runtimeArgs, filePath, ...extraArgs], {
-    stdio: 'inherit',
-    cwd: process.cwd(),
-    env: process.env
-});
-
-proc.on('exit', (code) => {
-    process.exit(code);
-});
-
-proc.on('error', (err) => {
-    console.error(`Failed to start ${runtime}:`, err.message);
+buildAndRun().catch((err) => {
+    console.error('Error:', err.message);
     process.exit(1);
 });
