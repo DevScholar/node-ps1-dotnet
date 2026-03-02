@@ -96,7 +96,7 @@ export function ensureMemberTypeCached(id: string, memberName: string, memberCac
 export function createLazyArray(arr: any[]): any {
     return new Proxy(arr, {
         get(target, prop) {
-            if (typeof prop === 'symbol') return target[prop];
+            if (typeof prop === 'symbol') return (target as any)[prop];
             const index = Number(prop);
             if (!isNaN(index) && index >= 0 && index < target.length) {
                 return createProxy(target[index]);

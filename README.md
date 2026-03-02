@@ -6,7 +6,7 @@ This is a project that mimics the [Node API for .NET](https://github.com/microso
 
 # Requirements
 
-- **Node.js** 22+ (uses `--experimental-transform-types` for native TypeScript support)
+- **Node.js** 18+ (LTS version recommended)
 - **PowerShell** 5.1 (built-in on Windows 10/11)
 - **.NET Framework** 4.5+ (required by PowerShell 5.1, pre-installed on Windows 10/11)
 
