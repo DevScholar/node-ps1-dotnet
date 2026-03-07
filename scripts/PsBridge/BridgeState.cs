@@ -29,11 +29,19 @@ public static class BridgeState
     public static BlockingCollection<Dictionary<string, object>> CommandQueue { get; set; }
     public static BlockingCollection<Dictionary<string, object>> ReplyQueue { get; set; }
     
+    // Queue for events dispatched in polling mode (set by StartApplication)
+    public static System.Collections.Concurrent.ConcurrentQueue<string> EventQueue { get; set; }
+
+    // When true, AddEvent handlers enqueue instead of blocking on ProcessNestedCommands
+    public static bool UseQueueMode { get; set; }
+
     static BridgeState()
     {
         _objectStore = new Dictionary<string, object>();
         CommandQueue = new BlockingCollection<Dictionary<string, object>>();
         ReplyQueue = new BlockingCollection<Dictionary<string, object>>();
         IsClosing = false;
+        EventQueue = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        UseQueueMode = false;
     }
 }

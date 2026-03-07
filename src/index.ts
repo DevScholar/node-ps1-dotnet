@@ -189,6 +189,30 @@ const dotnetProxy = new Proxy(function() {} as any, {
             const ipc = getIpc();
             return (targetId: string, memberName: string) => ipc!.send({ action: 'Inspect', targetId, memberName });
         }
+        // Polling-mode helpers used by node-with-window on Windows
+        if (prop === 'startApplication') {
+            return (app: any, window: any) => {
+                doInitialize();
+                getIpc()!.send({ action: 'StartApplication', appId: app.__ref, windowId: window.__ref });
+            };
+        }
+        if (prop === 'pollEvent') {
+            return () => getIpc()!.send({ action: 'Poll' });
+        }
+        if (prop === 'dispatchEvent') {
+            return (eventJson: string) => {
+                const res = JSON.parse(eventJson);
+                const cb = callbackRegistry.get(res.callbackId!);
+                if (cb) {
+                    const wrappedArgs = (res.args || []).map((arg: any) => {
+                        if (arg && arg.type === 'ref' && arg.props) return createProxyWithInlineProps(arg);
+                        return createProxy(arg);
+                    });
+                    return cb(...wrappedArgs);
+                }
+                return null;
+            };
+        }
         return node_ps1_dotnet._load(prop);
     },
     apply: (target: any, argArray: any[], newTarget: any) => {

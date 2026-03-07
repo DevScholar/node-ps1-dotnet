@@ -175,18 +175,23 @@ public static class Reflection
                         };
                         
                         var json = SimpleJson.Serialize(msg);
-                        writer.WriteLine(json);
-                        
-                        try
+
+                        if (BridgeState.UseQueueMode)
                         {
-                            if (PsHost.ProcessNestedCommands != null)
-                            {
-                                PsHost.ProcessNestedCommands();
-                            }
+                            BridgeState.EventQueue.Enqueue(json);
                         }
-                        catch { }
+                        else
+                        {
+                            writer.WriteLine(json);
+                            try
+                            {
+                                if (PsHost.ProcessNestedCommands != null)
+                                    PsHost.ProcessNestedCommands();
+                            }
+                            catch { }
+                        }
                     };
-                    
+
                     handler = Delegate.CreateDelegate(delegateType, handlerAction.Target, handlerAction.Method);
                 }
                 else
@@ -195,9 +200,9 @@ public static class Reflection
                     {
                         var writer = BridgeState.Writer;
                         if (writer == null) return;
-                        
+
                         var protoArgs = new List<Dictionary<string, object>>();
-                        
+
                         if (args != null)
                         {
                             foreach (var arg in args)
@@ -212,25 +217,30 @@ public static class Reflection
                                 }
                             }
                         }
-                        
+
                         var msg = new Dictionary<string, object>
                         {
                             { "type", "event" },
                             { "callbackId", cbId },
                             { "args", protoArgs }
                         };
-                        
+
                         var json = SimpleJson.Serialize(msg);
-                        writer.WriteLine(json);
-                        
-                        try
+
+                        if (BridgeState.UseQueueMode)
                         {
-                            if (PsHost.ProcessNestedCommands != null)
-                            {
-                                PsHost.ProcessNestedCommands();
-                            }
+                            BridgeState.EventQueue.Enqueue(json);
                         }
-                        catch { }
+                        else
+                        {
+                            writer.WriteLine(json);
+                            try
+                            {
+                                if (PsHost.ProcessNestedCommands != null)
+                                    PsHost.ProcessNestedCommands();
+                            }
+                            catch { }
+                        }
                     };
                     
                     handler = Delegate.CreateDelegate(delegateType, handlerAction.Target, handlerAction.Method);
@@ -666,6 +676,72 @@ public static class Reflection
             return Protocol.ConvertToProtocol(asm);
         }
         
+        if (action == "Poll")
+        {
+            string eventJson;
+            if (BridgeState.EventQueue.TryDequeue(out eventJson))
+            {
+                return new Dictionary<string, object>
+                {
+                    { "type", "ipc" },
+                    { "message", eventJson }
+                };
+            }
+            return new Dictionary<string, object> { { "type", "none" } };
+        }
+
+        if (action == "StartApplication")
+        {
+            var appId    = cmd["appId"].ToString();
+            var windowId = cmd["windowId"].ToString();
+            var wpfApp    = BridgeState.ObjectStore[appId];
+            var wpfWindow = BridgeState.ObjectStore[windowId];
+
+            BridgeState.UseQueueMode = true;
+
+            // Install the WPF DispatcherSynchronizationContext so the reader thread can
+            // dispatch Poll commands onto the UI thread via MainSyncContext.Post().
+            // By this point WindowsBase.dll is already loaded (WPF objects have been created).
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (asm.GetName().Name != "WindowsBase") continue;
+                var dispatcherType  = asm.GetType("System.Windows.Threading.Dispatcher");
+                var syncContextType = asm.GetType("System.Windows.Threading.DispatcherSynchronizationContext");
+                if (dispatcherType == null || syncContextType == null) break;
+                var dispatcher  = dispatcherType.GetProperty("CurrentDispatcher").GetValue(null);
+                var syncContext = Activator.CreateInstance(syncContextType, dispatcher)
+                                  as System.Threading.SynchronizationContext;
+                if (syncContext != null)
+                    PsHost.MainSyncContext = syncContext;
+                break;
+            }
+
+            // Pre-send the response BEFORE Application.Run() blocks this thread.
+            var okJson = SimpleJson.Serialize(new Dictionary<string, object>
+            {
+                { "type", "primitive" }, { "value", true }
+            });
+            lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(okJson); }
+
+            // Start the WPF message loop — blocks until the window is closed.
+            MethodInfo runMethod = null;
+            foreach (var m in wpfApp.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (m.Name == "Run" && m.GetParameters().Length == 1)
+                {
+                    runMethod = m;
+                    break;
+                }
+            }
+            if (runMethod != null) runMethod.Invoke(wpfApp, new object[] { wpfWindow });
+
+            // Window closed — terminate the host process.
+            Environment.Exit(0);
+
+            // Unreachable; satisfies compiler (ExecuteCommand won't write a second response).
+            return new Dictionary<string, object> { { "__skipResponse", true } };
+        }
+
         if (action == "Release")
         {
             Protocol.RemoveBridgeObject(cmd["targetId"].ToString());

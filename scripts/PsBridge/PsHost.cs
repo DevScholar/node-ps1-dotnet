@@ -61,6 +61,10 @@ public static class PsHost
             var result = Reflection.InvokeReflectionLogic(cmd);
             UpdateSyncContext();
 
+            // StartApplication pre-sends its own response and then blocks; skip the normal write.
+            if (result != null && result.ContainsKey("__skipResponse"))
+                return;
+
             var json = SimpleJson.Serialize(result);
             lock (BridgeState.Writer)
             {
