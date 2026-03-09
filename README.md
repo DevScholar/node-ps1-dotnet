@@ -1,6 +1,6 @@
 # Node PS1 for .NET
 
-⚠️ This project is still in pre-alpha stage, and API is subject to change. 
+⚠️ This project is still in Alpha stage, and API is subject to change. 
 
 This is a project that mimics the [Node API for .NET](https://github.com/microsoft/node-api-dotnet), aiming to utilize the built-in PowerShell 5.1 in Windows to replace the full high-version .NET runtime, thereby reducing the program's size. Since this project uses IPC instead of C++ Addon, it is compatible not only with Node but also with Deno and Bun.
 
