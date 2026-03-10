@@ -74,14 +74,10 @@ const text = btn.Text;            // Read property
 
 ```typescript
 // node-api-dotnet
-console.log(dotnet.runtimeInfo.frameworkMoniker);  // 'net472'
-console.log(dotnet.runtimeInfo.runtimeVersion);    // '4.0.30319.42000'
+console.log(dotnet.frameworkMoniker);  // 'net472'
+console.log(dotnet.runtimeVersion);   // '4.0.30319.42000'
 
 // node-ps1-dotnet — identical
-console.log(dotnet.runtimeInfo.frameworkMoniker);
-console.log(dotnet.runtimeInfo.runtimeVersion);
-
-// Also supports direct property access
 console.log(dotnet.frameworkMoniker);
 console.log(dotnet.runtimeVersion);
 ```

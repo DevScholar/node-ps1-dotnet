@@ -95,4 +95,20 @@ const isWindows = process.platform === 'win32';
     expect(dotnet.node_ps1_dotnet).toBeDefined();
     expect(typeof dotnet.node_ps1_dotnet._load).toBe('function');
   });
+
+  it('should expose addListener method', () => {
+    expect(typeof dotnet.default.addListener).toBe('function');
+  });
+
+  it('addListener resolving should accept a callback without throwing', () => {
+    expect(() => {
+      dotnet.default.addListener('resolving', (name: string) => null);
+    }).not.toThrow();
+  });
+
+  it('addListener with unknown event name should not throw', () => {
+    expect(() => {
+      dotnet.default.addListener('unknown-event', () => {});
+    }).not.toThrow();
+  });
 });

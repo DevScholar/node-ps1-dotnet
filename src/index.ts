@@ -180,9 +180,6 @@ const dotnetProxy = new Proxy(function() {} as any, {
         if (prop === 'loadFrom') return (filePath: string) => {
             node_ps1_dotnet._loadFrom(filePath);
         };
-        if (prop === 'runtimeInfo') {
-            return node_ps1_dotnet._getRuntimeInfo();
-        }
         if (prop === 'frameworkMoniker') {
             return node_ps1_dotnet._getRuntimeInfo().frameworkMoniker;
         }
