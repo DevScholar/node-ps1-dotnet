@@ -124,7 +124,7 @@ public static class Reflection
                 {
                     if (m.Name == memberName) { found = true; break; }
                 }
-                members[memberName] = found ? "method" : "method";
+                members[memberName] = found ? "method" : "unknown";
             }
 
             result["members"] = members;
@@ -243,8 +243,7 @@ public static class Reflection
                     // Most real-world events use 0, 1, or 2 parameters.
                     handler = null;
                 }
-                }
-                
+
                 eventInfo.AddEventHandler(target, handler);
             }
             
@@ -739,6 +738,42 @@ public static class Reflection
 
             // Unreachable; satisfies compiler (ExecuteCommand won't write a second response).
             return new Dictionary<string, object> { { "__skipResponse", true } };
+        }
+
+        if (action == "SetResolvingCallback")
+        {
+            var cbId = cmd["callbackId"].ToString();
+            AppDomain.CurrentDomain.AssemblyResolve += (resolveSender, resolveArgs) =>
+            {
+                var writer = BridgeState.Writer;
+                if (writer == null) return null;
+                var eventArgs = new List<Dictionary<string, object>>();
+                eventArgs.Add(new Dictionary<string, object> { { "type", "primitive" }, { "value", resolveArgs.Name } });
+                var msg = new Dictionary<string, object>
+                {
+                    { "type", "event" },
+                    { "callbackId", cbId },
+                    { "args", eventArgs }
+                };
+                var json = SimpleJson.Serialize(msg);
+                lock (writer) { writer.WriteLine(json); }
+
+                object result = null;
+                try
+                {
+                    if (PsHost.ProcessNestedCommands != null)
+                        result = PsHost.ProcessNestedCommands();
+                }
+                catch { }
+
+                var path = result as string;
+                if (path != null && path.Length > 0)
+                {
+                    try { return Assembly.LoadFrom(path); } catch { }
+                }
+                return null;
+            };
+            return new Dictionary<string, object> { { "type", "void" } };
         }
 
         if (action == "Release")

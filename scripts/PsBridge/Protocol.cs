@@ -178,6 +178,17 @@ public static class SimpleJson
             }
             return "[" + string.Join(",", parts.ToArray()) + "]";
         }
+
+        if (obj is List<object>)
+        {
+            var list = (List<object>)obj;
+            var parts = new List<string>();
+            foreach (var item in list)
+            {
+                parts.Add(Serialize(item));
+            }
+            return "[" + string.Join(",", parts.ToArray()) + "]";
+        }
         
         if (obj is string)
         {
