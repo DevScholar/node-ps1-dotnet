@@ -85,7 +85,14 @@ public static class Reflection
         if (action == "InspectType")
         {
             var typeName = cmd["typeName"].ToString();
-            var memberNames = (System.Collections.ArrayList)cmd["memberNames"];
+            var rawList = cmd["memberNames"] as System.Collections.Generic.List<object>;
+            var emptyResult = new Dictionary<string, object>
+            {
+                { "typeName", typeName },
+                { "members", new Dictionary<string, string>() }
+            };
+            if (rawList == null) return emptyResult;
+
             var type = Type.GetType(typeName);
             if (type == null)
             {
@@ -96,13 +103,15 @@ public static class Reflection
                     if (type != null) break;
                 }
             }
-            
+            if (type == null) return emptyResult;
+
             var result = new Dictionary<string, object>();
             result["typeName"] = typeName;
             var members = new Dictionary<string, string>();
-            
-            foreach (string memberName in memberNames)
+
+            foreach (object item in rawList)
             {
+                var memberName = item.ToString();
                 var prop = type.GetProperty(memberName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
                 if (prop != null)
                 {
@@ -110,20 +119,14 @@ public static class Reflection
                     continue;
                 }
                 var methods = type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
+                var found = false;
                 foreach (var m in methods)
                 {
-                    if (m.Name == memberName)
-                    {
-                        members[memberName] = "method";
-                        break;
-                    }
+                    if (m.Name == memberName) { found = true; break; }
                 }
-                if (!members.ContainsKey(memberName))
-                {
-                    members[memberName] = "method";
-                }
+                members[memberName] = found ? "method" : "method";
             }
-            
+
             result["members"] = members;
             return result;
         }
@@ -142,8 +145,48 @@ public static class Reflection
                 var parameters = invokeMethod.GetParameters();
                 
                 Delegate handler = null;
-                
-                if (parameters.Length == 2)
+
+                if (parameters.Length == 0)
+                {
+                    Action handler0 = () =>
+                    {
+                        var writer = BridgeState.Writer;
+                        if (writer == null) return;
+                        var msg = new Dictionary<string, object>
+                        {
+                            { "type", "event" },
+                            { "callbackId", cbId },
+                            { "args", new List<Dictionary<string, object>>() }
+                        };
+                        var json = SimpleJson.Serialize(msg);
+                        if (BridgeState.UseQueueMode) { BridgeState.EventQueue.Enqueue(json); }
+                        else { writer.WriteLine(json); try { if (PsHost.ProcessNestedCommands != null) PsHost.ProcessNestedCommands(); } catch { } }
+                    };
+                    handler = Delegate.CreateDelegate(delegateType, handler0.Target, handler0.Method);
+                }
+                else if (parameters.Length == 1)
+                {
+                    Action<object> handler1 = (arg) =>
+                    {
+                        var writer = BridgeState.Writer;
+                        if (writer == null) return;
+                        var protoArgs = new List<Dictionary<string, object>>();
+                        protoArgs.Add(arg == null
+                            ? new Dictionary<string, object> { { "type", "null" } }
+                            : Protocol.ConvertToProtocol(arg));
+                        var msg = new Dictionary<string, object>
+                        {
+                            { "type", "event" },
+                            { "callbackId", cbId },
+                            { "args", protoArgs }
+                        };
+                        var json = SimpleJson.Serialize(msg);
+                        if (BridgeState.UseQueueMode) { BridgeState.EventQueue.Enqueue(json); }
+                        else { writer.WriteLine(json); try { if (PsHost.ProcessNestedCommands != null) PsHost.ProcessNestedCommands(); } catch { } }
+                    };
+                    handler = Delegate.CreateDelegate(delegateType, handler1.Target, handler1.Method);
+                }
+                else if (parameters.Length == 2)
                 {
                     var senderType = parameters[0].ParameterType;
                     var eType = parameters[1].ParameterType;
@@ -196,54 +239,10 @@ public static class Reflection
                 }
                 else
                 {
-                    Action<object[]> handlerAction = (args) =>
-                    {
-                        var writer = BridgeState.Writer;
-                        if (writer == null) return;
-
-                        var protoArgs = new List<Dictionary<string, object>>();
-
-                        if (args != null)
-                        {
-                            foreach (var arg in args)
-                            {
-                                if (arg == null)
-                                {
-                                    protoArgs.Add(new Dictionary<string, object> { { "type", "null" } });
-                                }
-                                else
-                                {
-                                    protoArgs.Add(Protocol.ConvertToProtocol(arg));
-                                }
-                            }
-                        }
-
-                        var msg = new Dictionary<string, object>
-                        {
-                            { "type", "event" },
-                            { "callbackId", cbId },
-                            { "args", protoArgs }
-                        };
-
-                        var json = SimpleJson.Serialize(msg);
-
-                        if (BridgeState.UseQueueMode)
-                        {
-                            BridgeState.EventQueue.Enqueue(json);
-                        }
-                        else
-                        {
-                            writer.WriteLine(json);
-                            try
-                            {
-                                if (PsHost.ProcessNestedCommands != null)
-                                    PsHost.ProcessNestedCommands();
-                            }
-                            catch { }
-                        }
-                    };
-                    
-                    handler = Delegate.CreateDelegate(delegateType, handlerAction.Target, handlerAction.Method);
+                    // Delegates with 3+ parameters: not supported, event will be silently ignored.
+                    // Most real-world events use 0, 1, or 2 parameters.
+                    handler = null;
+                }
                 }
                 
                 eventInfo.AddEventHandler(target, handler);

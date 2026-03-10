@@ -146,7 +146,8 @@ public static class Protocol
 
     public static void RemoveBridgeObject(string id)
     {
-        BridgeState.ObjectStore.Remove(id);
+        object ignored;
+        BridgeState.ObjectStore.TryRemove(id, out ignored);
     }
 }
 

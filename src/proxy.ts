@@ -1,4 +1,4 @@
-import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.js';
+import { getIpc } from './state.js';
 
 export let node_ps1_dotnetGetter: (() => any) | null = null;
 
@@ -20,8 +20,6 @@ const gcRegistry = new FinalizationRegistry((id: string) => {
 export const callbackRegistry = new Map<string, Function>();
 export const typeMetadataCache = new Map<string, Map<string, string>>();
 export const globalTypeCache = new Map<string, Map<string, string>>();
-export const pendingInspectRequests = new Map<string, string[]>();
-export const pendingInspectTimeout = new Map<string, NodeJS.Timeout>();
 export const typeNameCache = new Map<string, string>();
 export const LARGE_ARRAY_THRESHOLD = 50;
 
@@ -120,12 +118,23 @@ export function createLazyArray(arr: any[]): any {
     });
 }
 
-export function createProxyWithInlineProps(meta: any): any {
-    if (meta.type !== 'ref') return createProxy(meta);
+// Marshal JS args to .NET-compatible format: refs by ID, functions as callbacks.
+function marshalArgs(args: any[]): any[] {
+    return args.map((a: any) => {
+        if (a && a.__ref) return { __ref: a.__ref };
+        if (typeof a === 'function') {
+            const cbId = `cb_arg_${Date.now()}_${Math.random()}`;
+            callbackRegistry.set(cbId, a);
+            return { type: 'callback', callbackId: cbId };
+        }
+        return a;
+    });
+}
 
+// Core proxy factory for a .NET object reference.
+// inlineProps: pre-fetched property values attached to event args, avoids extra round-trips.
+function makeRefProxy(id: string, inlineProps?: Record<string, any>): any {
     const ipc = getIpc();
-    const id = meta.id!;
-    const inlineProps = meta.props || {};
 
     if (!typeMetadataCache.has(id)) {
         typeMetadataCache.set(id, new Map());
@@ -135,12 +144,13 @@ export function createProxyWithInlineProps(meta: any): any {
     class Stub {}
 
     const proxy = new Proxy(Stub, {
-        get: (target: any, prop: string) => {
+        get: (_target: any, prop: string) => {
             if (prop === '__ref') return id;
             if (prop === '__inlineProps') return inlineProps;
             if (typeof prop !== 'string') return undefined;
 
-            if (inlineProps.hasOwnProperty(prop)) {
+            // Fast path: use pre-fetched inline props (typically on event args).
+            if (inlineProps && Object.prototype.hasOwnProperty.call(inlineProps, prop)) {
                 memberCache.set(prop, 'property');
                 return inlineProps[prop];
             }
@@ -155,7 +165,6 @@ export function createProxyWithInlineProps(meta: any): any {
             }
 
             let memType = memberCache.get(prop);
-
             if (!memType) {
                 ensureMemberTypeCached(id, prop, memberCache);
                 memType = memberCache.get(prop);
@@ -166,22 +175,13 @@ export function createProxyWithInlineProps(meta: any): any {
                 return createProxy(res);
             } else {
                 return (...args: any[]) => {
-                    const netArgs = args.map((a: any) => {
-                        if (a && a.__ref) return { __ref: a.__ref };
-                        if (typeof a === 'function') {
-                            const cbId = `cb_arg_${Date.now()}_${Math.random()}`;
-                            callbackRegistry.set(cbId, a);
-                            return { type: 'callback', callbackId: cbId };
-                        }
-                        return a;
-                    });
-                    const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: netArgs });
+                    const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: marshalArgs(args) });
                     return createProxy(res);
                 };
             }
         },
 
-        set: (target: any, prop: string, value: any) => {
+        set: (_target: any, prop: string, value: any) => {
             if (typeof prop !== 'string') return false;
             const netArg = (value && value.__ref) ? { __ref: value.__ref } : value;
             ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [netArg] });
@@ -189,17 +189,8 @@ export function createProxyWithInlineProps(meta: any): any {
             return true;
         },
 
-        construct: (target: any, args: any[]) => {
-            const netArgs = args.map((a: any) => {
-                if (a && a.__ref) return { __ref: a.__ref };
-                if (typeof a === 'function') {
-                    const cbId = `cb_ctor_${Date.now()}_${Math.random()}`;
-                    callbackRegistry.set(cbId, a);
-                    return { type: 'callback', callbackId: cbId };
-                }
-                return a;
-            });
-            const res = ipc!.send({ action: 'New', typeId: id, args: netArgs });
+        construct: (_target: any, args: any[]) => {
+            const res = ipc!.send({ action: 'New', typeId: id, args: marshalArgs(args) });
             return createProxy(res);
         },
 
@@ -210,9 +201,14 @@ export function createProxyWithInlineProps(meta: any): any {
     return proxy;
 }
 
+export function createProxyWithInlineProps(meta: any): any {
+    if (meta.type !== 'ref') return createProxy(meta);
+    return makeRefProxy(meta.id, meta.props || {});
+}
+
 export function createProxy(meta: any): any {
     const ipc = getIpc();
-    
+
     if (meta.type === 'primitive' || meta.type === 'null') return meta.value;
 
     if (meta.type === 'array') {
@@ -241,7 +237,7 @@ export function createProxy(meta: any): any {
         const nsName = meta.value;
         const dotnet = getNodePs1Dotnet();
         return new Proxy({}, {
-            get: (target: any, prop: string) => {
+            get: (_target: any, prop: string) => {
                 if (typeof prop !== 'string') return undefined;
                 return dotnet._load(`${nsName}.${prop}`);
             }
@@ -250,81 +246,5 @@ export function createProxy(meta: any): any {
 
     if (meta.type !== 'ref') return null;
 
-    const id = meta.id!;
-
-    if (!typeMetadataCache.has(id)) {
-        typeMetadataCache.set(id, new Map());
-    }
-    const memberCache = typeMetadataCache.get(id)!;
-
-    class Stub {}
-
-    const proxy = new Proxy(Stub, {
-        get: (target: any, prop: string) => {
-            if (prop === '__ref') return id;
-            if (typeof prop !== 'string') return undefined;
-
-            if (prop.startsWith('add_')) {
-                const eventName = prop.substring(4);
-                return (callback: Function) => {
-                    const cbId = `cb_${Date.now()}_${Math.random()}`;
-                    callbackRegistry.set(cbId, callback);
-                    ipc!.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
-                };
-            }
-
-            let memType = memberCache.get(prop);
-
-            if (!memType) {
-                ensureMemberTypeCached(id, prop, memberCache);
-                memType = memberCache.get(prop);
-            }
-
-            if (memType === 'property') {
-                const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [] });
-                return createProxy(res);
-            } else {
-                return (...args: any[]) => {
-                    const netArgs = args.map((a: any) => {
-                        if (a && a.__ref) return { __ref: a.__ref };
-                        if (typeof a === 'function') {
-                            const cbId = `cb_arg_${Date.now()}_${Math.random()}`;
-                            callbackRegistry.set(cbId, a);
-                            return { type: 'callback', callbackId: cbId };
-                        }
-                        return a;
-                    });
-                    const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: netArgs });
-                    return createProxy(res);
-                };
-            }
-        },
-
-        set: (target: any, prop: string, value: any) => {
-            if (typeof prop !== 'string') return false;
-            const netArg = (value && value.__ref) ? { __ref: value.__ref } : value;
-            ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [netArg] });
-            memberCache.set(prop, 'property');
-            return true;
-        },
-
-        construct: (target: any, args: any[]) => {
-            const netArgs = args.map((a: any) => {
-                if (a && a.__ref) return { __ref: a.__ref };
-                if (typeof a === 'function') {
-                    const cbId = `cb_ctor_${Date.now()}_${Math.random()}`;
-                    callbackRegistry.set(cbId, a);
-                    return { type: 'callback', callbackId: cbId };
-                }
-                return a;
-            });
-            const res = ipc!.send({ action: 'New', typeId: id, args: netArgs });
-            return createProxy(res);
-        },
-
-        apply: () => { throw new Error("Cannot call .NET object as a function. Need 'new'?"); }
-    });
-
-    gcRegistry.register(proxy, id);
-    return proxy;
+    return makeRefProxy(meta.id);
 }

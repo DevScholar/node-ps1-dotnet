@@ -160,20 +160,29 @@ public static class PsHost
     }
 }
 
-// SimpleJsonDeserializer requires no changes, it works as-is...
+// SimpleJsonDeserializer: static entry point, instance-based parsing (thread-safe).
 public static class SimpleJsonDeserializer
 {
-    private static int _index;
-    private static string _json;
-
     public static object Deserialize(string json)
+    {
+        return new JsonParser(json).Parse();
+    }
+}
+
+internal class JsonParser
+{
+    private int _index;
+    private readonly string _json;
+
+    public JsonParser(string json)
     {
         _json = json;
         _index = 0;
-        return ParseValue();
     }
 
-    private static void SkipWhitespace()
+    public object Parse() { return ParseValue(); }
+
+    private void SkipWhitespace()
     {
         while (_index < _json.Length && char.IsWhiteSpace(_json[_index]))
         {
@@ -181,7 +190,7 @@ public static class SimpleJsonDeserializer
         }
     }
 
-    private static object ParseValue()
+    private object ParseValue()
     {
         SkipWhitespace();
         
@@ -230,7 +239,7 @@ public static class SimpleJsonDeserializer
         return null;
     }
 
-    private static string ParseString()
+    private string ParseString()
     {
         _index++;
         var start = _index;
@@ -270,7 +279,7 @@ public static class SimpleJsonDeserializer
         return result.ToString();
     }
 
-    private static object ParseNumber()
+    private object ParseNumber()
     {
         var start = _index;
         
@@ -318,7 +327,7 @@ public static class SimpleJsonDeserializer
         }
     }
 
-    private static Dictionary<string, object> ParseObject()
+    private Dictionary<string, object> ParseObject()
     {
         var result = new Dictionary<string, object>();
         _index++;
@@ -361,7 +370,7 @@ public static class SimpleJsonDeserializer
         return result;
     }
 
-    private static List<object> ParseArray()
+    private List<object> ParseArray()
     {
         var result = new List<object>();
         _index++;

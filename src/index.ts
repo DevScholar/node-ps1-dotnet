@@ -135,10 +135,6 @@ export const node_ps1_dotnet = {
         cleanup();
     },
 
-    _getAssembly(assemblyName: string): any {
-        return this._load(assemblyName);
-    },
-
     _loadAssembly(assemblyName: string): any {
         doInitialize();
         const ipc = getIpc();
@@ -173,8 +169,13 @@ const dotnetProxy = new Proxy(function() {} as any, {
     get: (target: any, prop: string) => {
         if (prop === 'default') return dotnetProxy;
         if (prop === 'then') return undefined;
-        if (prop === 'load') return (assemblyNameOrFilePath: string) => {
-            node_ps1_dotnet._loadAssembly(assemblyNameOrFilePath);
+        if (prop === 'load') return (nameOrPath: string) => {
+            if (nameOrPath.includes('/') || nameOrPath.includes('\\') ||
+                nameOrPath.endsWith('.dll') || nameOrPath.endsWith('.exe')) {
+                node_ps1_dotnet._loadFrom(nameOrPath);
+            } else {
+                node_ps1_dotnet._loadAssembly(nameOrPath);
+            }
         };
         if (prop === 'loadFrom') return (filePath: string) => {
             node_ps1_dotnet._loadFrom(filePath);
@@ -198,20 +199,6 @@ const dotnetProxy = new Proxy(function() {} as any, {
         }
         if (prop === 'pollEvent') {
             return () => getIpc()!.send({ action: 'Poll' });
-        }
-        if (prop === 'dispatchEvent') {
-            return (eventJson: string) => {
-                const res = JSON.parse(eventJson);
-                const cb = callbackRegistry.get(res.callbackId!);
-                if (cb) {
-                    const wrappedArgs = (res.args || []).map((arg: any) => {
-                        if (arg && arg.type === 'ref' && arg.props) return createProxyWithInlineProps(arg);
-                        return createProxy(arg);
-                    });
-                    return cb(...wrappedArgs);
-                }
-                return null;
-            };
         }
         return node_ps1_dotnet._load(prop);
     },
