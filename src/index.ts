@@ -205,6 +205,15 @@ const dotnetProxy = new Proxy(function() {} as any, {
             const ipc = getIpc();
             return (targetId: string, memberName: string) => ipc!.send({ action: 'Inspect', targetId, memberName });
         }
+        // Registers a bridge script and navigates atomically: C# awaits the
+        // AddScriptToExecuteOnDocumentCreatedAsync Task via ContinueWith before
+        // calling Navigate, preventing the race condition in polling mode.
+        if (prop === 'addScriptAndNavigate') {
+            return (coreWebView2: any, script: string, url: string) => {
+                doInitialize();
+                getIpc()!.send({ action: 'AddScriptAndNavigate', targetId: coreWebView2.__ref, script, url });
+            };
+        }
         // Polling-mode helpers used by node-with-window on Windows
         if (prop === 'startApplication') {
             return (app: any, window: any, webView?: any) => {

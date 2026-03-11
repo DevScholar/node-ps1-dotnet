@@ -700,6 +700,65 @@ public static class Reflection
             return new Dictionary<string, object> { { "type", "none" } };
         }
 
+        // Registers a script on CoreWebView2, waits for the registration Task to
+        // complete (cross-process ack), then navigates — all without blocking the
+        // WPF UI thread.  Task.ContinueWith runs on a thread-pool thread; it marshals
+        // the Navigate call back to the UI thread via MainSyncContext.Post.
+        if (action == "AddScriptAndNavigate")
+        {
+            var targetId = cmd["targetId"].ToString();
+            var script   = cmd["script"].ToString();
+            var url      = cmd["url"].ToString();
+
+            var coreWebView2 = BridgeState.ObjectStore[targetId];
+            var coreWebView2Type = coreWebView2.GetType();
+
+            MethodInfo addScriptMethod = null;
+            foreach (var m in coreWebView2Type.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (m.Name == "AddScriptToExecuteOnDocumentCreatedAsync" && m.GetParameters().Length == 1)
+                {
+                    addScriptMethod = m;
+                    break;
+                }
+            }
+
+            MethodInfo navigateMethod = null;
+            foreach (var m in coreWebView2Type.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (m.Name == "Navigate" && m.GetParameters().Length == 1)
+                {
+                    navigateMethod = m;
+                    break;
+                }
+            }
+
+            if (addScriptMethod == null || navigateMethod == null)
+            {
+                throw new Exception("AddScriptAndNavigate: could not find required CoreWebView2 methods");
+            }
+
+            var task = (Task)addScriptMethod.Invoke(coreWebView2, new object[] { script });
+            var capturedNavigateMethod = navigateMethod;
+            var capturedCoreWebView2   = coreWebView2;
+            var capturedUrl            = url;
+            var capturedContext        = PsHost.MainSyncContext;
+
+            task.ContinueWith(delegate(Task t)
+            {
+                if (capturedContext != null)
+                {
+                    capturedContext.Post(delegate(object state)
+                    {
+                        try { capturedNavigateMethod.Invoke(capturedCoreWebView2, new object[] { capturedUrl }); }
+                        catch { }
+                    }, null);
+                }
+            });
+
+            return new Dictionary<string, object> { { "type", "void" } };
+        }
+
         if (action == "StartApplication")
         {
             var appId    = cmd["appId"].ToString();
