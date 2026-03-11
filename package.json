@@ -10,7 +10,10 @@
     "scripts"
   ],
   "exports": {
-    ".": "./dist/index.js"
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "types": "./types/index.d.ts",
   "scripts": {

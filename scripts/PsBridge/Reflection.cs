@@ -662,6 +662,18 @@ public static class Reflection
             {
                 throw new Exception("File not found: " + filePath);
             }
+            // Add the DLL's directory to PATH so native side-by-side dependencies
+            // (e.g. WebView2Loader.dll) are discoverable by the Windows DLL loader.
+            string dllDir = Path.GetDirectoryName(filePath);
+            if (dllDir != null && dllDir.Length > 0)
+            {
+                string currentPath = Environment.GetEnvironmentVariable("PATH");
+                if (currentPath == null) currentPath = "";
+                if (currentPath.IndexOf(dllDir, StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    Environment.SetEnvironmentVariable("PATH", dllDir + ";" + currentPath);
+                }
+            }
             Assembly asm = null;
             try
             {
@@ -696,6 +708,56 @@ public static class Reflection
             var wpfWindow = BridgeState.ObjectStore[windowId];
 
             BridgeState.UseQueueMode = true;
+
+            // If a webView ref is provided, hook Window.Loaded in C# to call
+            // EnsureCoreWebView2Async directly (fire-and-forget).
+            // Calling it via the Node.js poll callback would deadlock: AwaitTask sends
+            // task.Wait() on the WPF UI thread, but the task needs the dispatcher to
+            // pump messages to complete.
+            if (cmd.ContainsKey("webViewId"))
+            {
+                var webViewRef = cmd["webViewId"].ToString();
+                var webViewObj = BridgeState.ObjectStore[webViewRef];
+                var loadedEvent = wpfWindow.GetType().GetEvent("Loaded");
+                if (loadedEvent != null)
+                {
+                    Action<object, object> loadedAction = (sender, e) =>
+                    {
+                        MethodInfo ensureMethod = null;
+                        foreach (var m in webViewObj.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance))
+                        {
+                            if (m.Name == "EnsureCoreWebView2Async" && m.GetParameters().Length == 1)
+                            {
+                                ensureMethod = m;
+                                break;
+                            }
+                        }
+                        if (ensureMethod == null)
+                        {
+                            foreach (var m in webViewObj.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance))
+                            {
+                                if (m.Name == "EnsureCoreWebView2Async")
+                                {
+                                    ensureMethod = m;
+                                    break;
+                                }
+                            }
+                        }
+                        if (ensureMethod != null)
+                        {
+                            try { ensureMethod.Invoke(webViewObj, new object[] { null }); }
+                            catch { }
+                        }
+                    };
+                    try
+                    {
+                        var delegateType = loadedEvent.EventHandlerType;
+                        var handler = Delegate.CreateDelegate(delegateType, loadedAction.Target, loadedAction.Method);
+                        loadedEvent.AddEventHandler(wpfWindow, handler);
+                    }
+                    catch { }
+                }
+            }
 
             // Install the WPF DispatcherSynchronizationContext so the reader thread can
             // dispatch Poll commands onto the UI thread via MainSyncContext.Post().
@@ -738,6 +800,47 @@ public static class Reflection
 
             // Unreachable; satisfies compiler (ExecuteCommand won't write a second response).
             return new Dictionary<string, object> { { "__skipResponse", true } };
+        }
+
+        if (action == "ExecuteScript")
+        {
+            var webViewId = cmd["webViewId"].ToString();
+            var script = cmd["script"].ToString();
+            var webViewObj = BridgeState.ObjectStore[webViewId];
+            
+            var coreWebView2Prop = webViewObj.GetType().GetProperty("CoreWebView2");
+            if (coreWebView2Prop == null)
+            {
+                return new Dictionary<string, object> { { "type", "error" }, { "message", "CoreWebView2 not available" } };
+            }
+            
+            var coreWebView2 = coreWebView2Prop.GetValue(webViewObj);
+            if (coreWebView2 == null)
+            {
+                return new Dictionary<string, object> { { "type", "error" }, { "message", "WebView2 not initialized" } };
+            }
+            
+            var executeScriptMethod = coreWebView2.GetType().GetMethod("ExecuteScript", new[] { typeof(string) });
+            if (executeScriptMethod == null)
+            {
+                return new Dictionary<string, object> { { "type", "error" }, { "message", "ExecuteScript method not found" } };
+            }
+            
+            try
+            {
+                var task = executeScriptMethod.Invoke(coreWebView2, new object[] { script }) as System.Threading.Tasks.Task<string>;
+                if (task != null)
+                {
+                    task.Wait();
+                    var result = task.Result;
+                    return new Dictionary<string, object> { { "type", "primitive" }, { "value", result } };
+                }
+                return new Dictionary<string, object> { { "type", "primitive" }, { "value", null } };
+            }
+            catch (Exception ex)
+            {
+                return new Dictionary<string, object> { { "type", "error" }, { "message", ex.Message } };
+            }
         }
 
         if (action == "SetResolvingCallback")

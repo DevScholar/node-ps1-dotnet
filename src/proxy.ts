@@ -21,6 +21,12 @@ export const callbackRegistry = new Map<string, Function>();
 export const typeMetadataCache = new Map<string, Map<string, string>>();
 export const globalTypeCache = new Map<string, Map<string, string>>();
 export const typeNameCache = new Map<string, string>();
+
+// When true (after startApplication), Task results are fire-and-forget instead of
+// synchronously blocked via AwaitTask. This prevents deadlocks in polling mode where
+// task.Wait() on the WPF UI thread blocks the dispatcher that the task needs to complete.
+export let pollingMode = false;
+export function setPollingMode(val: boolean) { pollingMode = val; }
 export const LARGE_ARRAY_THRESHOLD = 50;
 
 export function getObjectTypeName(id: string): string | null {
@@ -221,6 +227,12 @@ export function createProxy(meta: any): any {
 
     if (meta.type === 'task') {
         const taskId = meta.id;
+        // In polling mode, awaiting via task.Wait() on the WPF UI thread deadlocks.
+        // Release the task reference and return null (fire-and-forget).
+        if (pollingMode) {
+            try { ipc!.send({ action: 'Release', targetId: taskId }); } catch {}
+            return null;
+        }
         return new Promise((resolve, reject) => {
             try {
                 const res = ipc!.send({ action: 'AwaitTask', taskId: taskId });

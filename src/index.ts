@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { getPowerShellPath } from './utils.js';
 import { IpcSync } from './ipc.js';
 import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.js';
-import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet } from './proxy.js';
+import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet, setPollingMode } from './proxy.js';
 import { createNamespaceProxy, createExportNamespaceProxy } from './namespace.js';
 
 export const __filename = fileURLToPath(import.meta.url);
@@ -160,6 +160,16 @@ export const node_ps1_dotnet = {
         };
         setCachedRuntimeInfo(info);
         return info;
+    },
+
+    _executeScript(webViewId: string, script: string): string {
+        doInitialize();
+        const ipc = getIpc();
+        const res = ipc!.send({ action: 'ExecuteScript', webViewId, script });
+        if (res && res.type === 'error') {
+            throw new Error(res.message);
+        }
+        return res && res.value !== undefined ? res.value : null;
     }
 };
 
@@ -172,13 +182,10 @@ const dotnetProxy = new Proxy(function() {} as any, {
         if (prop === 'load') return (nameOrPath: string) => {
             if (nameOrPath.includes('/') || nameOrPath.includes('\\') ||
                 nameOrPath.endsWith('.dll') || nameOrPath.endsWith('.exe')) {
-                node_ps1_dotnet._loadFrom(nameOrPath);
+                return node_ps1_dotnet._loadFrom(nameOrPath);
             } else {
-                node_ps1_dotnet._loadAssembly(nameOrPath);
+                return node_ps1_dotnet._loadAssembly(nameOrPath);
             }
-        };
-        if (prop === 'loadFrom') return (filePath: string) => {
-            node_ps1_dotnet._loadFrom(filePath);
         };
         if (prop === 'frameworkMoniker') {
             return node_ps1_dotnet._getRuntimeInfo().frameworkMoniker;
@@ -200,13 +207,44 @@ const dotnetProxy = new Proxy(function() {} as any, {
         }
         // Polling-mode helpers used by node-with-window on Windows
         if (prop === 'startApplication') {
-            return (app: any, window: any) => {
+            return (app: any, window: any, webView?: any) => {
                 doInitialize();
-                getIpc()!.send({ action: 'StartApplication', appId: app.__ref, windowId: window.__ref });
+                const cmd: any = { action: 'StartApplication', appId: app.__ref, windowId: window.__ref };
+                if (webView) cmd.webViewId = webView.__ref;
+                getIpc()!.send(cmd);
+                // After startApplication, the WPF dispatcher owns the UI thread.
+                // Task.Wait() on the UI thread would deadlock; switch to fire-and-forget mode.
+                setPollingMode(true);
             };
         }
         if (prop === 'pollEvent') {
-            return () => getIpc()!.send({ action: 'Poll' });
+            return () => {
+                const ipc = getIpc();
+                if (!ipc) return false;
+                let processed = false;
+                while (true) {
+                    const res = ipc.send({ action: 'Poll' });
+                    if (!res || (res as any).type !== 'ipc') break;
+                    const message = (res as any).message;
+                    if (!message) break;
+                    let eventMsg: any;
+                    try { eventMsg = JSON.parse(message); } catch { break; }
+                    if (eventMsg && eventMsg.type === 'event' && eventMsg.callbackId) {
+                        const cb = callbackRegistry.get(eventMsg.callbackId);
+                        if (cb) {
+                            const wrappedArgs = (eventMsg.args || []).map((arg: any) => {
+                                if (arg && arg.type === 'ref' && arg.props) {
+                                    return createProxyWithInlineProps(arg);
+                                }
+                                return createProxy(arg);
+                            });
+                            try { cb(...wrappedArgs); } catch (e) { console.error('Event callback error:', e); }
+                            processed = true;
+                        }
+                    }
+                }
+                return processed;
+            };
         }
         return node_ps1_dotnet._load(prop);
     },
