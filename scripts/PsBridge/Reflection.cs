@@ -685,7 +685,13 @@ public static class Reflection
             }
             return Protocol.ConvertToProtocol(asm);
         }
-        
+
+        // ─── WebView2 / WPF Framework Actions ────────────────────────────────────
+        // The following actions are intended for authors building WebView2-based
+        // window frameworks (e.g. @devscholar/node-with-window). They rely on the
+        // WPF polling model (StartApplication + Poll) and WebView2-specific APIs.
+        // General node-ps1-dotnet users do not need to invoke these directly.
+
         if (action == "Poll")
         {
             string eventJson;

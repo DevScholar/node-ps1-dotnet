@@ -205,6 +205,12 @@ const dotnetProxy = new Proxy(function() {} as any, {
             const ipc = getIpc();
             return (targetId: string, memberName: string) => ipc!.send({ action: 'Inspect', targetId, memberName });
         }
+
+        // ─── WebView2 / WPF Framework API ────────────────────────────────────────
+        // The following properties are intended for authors building WebView2-based
+        // window frameworks (e.g. @devscholar/node-with-window). General users do
+        // not need to call these directly; they may evolve with framework needs.
+
         // Registers a bridge script and navigates atomically: C# awaits the
         // AddScriptToExecuteOnDocumentCreatedAsync Task via ContinueWith before
         // calling Navigate, preventing the race condition in polling mode.
