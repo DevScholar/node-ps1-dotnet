@@ -214,6 +214,12 @@ const dotnetProxy = new Proxy(function() {} as any, {
                 getIpc()!.send({ action: 'AddScriptAndNavigate', targetId: coreWebView2.__ref, script, url });
             };
         }
+        if (prop === 'addScriptAndNavigateToString') {
+            return (coreWebView2: any, script: string, html: string) => {
+                doInitialize();
+                getIpc()!.send({ action: 'AddScriptAndNavigateToString', targetId: coreWebView2.__ref, script, html });
+            };
+        }
         // Polling-mode helpers used by node-with-window on Windows
         if (prop === 'startApplication') {
             return (app: any, window: any, webView?: any) => {

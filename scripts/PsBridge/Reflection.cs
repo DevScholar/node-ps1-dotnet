@@ -759,6 +759,61 @@ public static class Reflection
             return new Dictionary<string, object> { { "type", "void" } };
         }
 
+        if (action == "AddScriptAndNavigateToString")
+        {
+            var targetId = cmd["targetId"].ToString();
+            var script   = cmd["script"].ToString();
+            var html     = cmd["html"].ToString();
+
+            var coreWebView2     = BridgeState.ObjectStore[targetId];
+            var coreWebView2Type = coreWebView2.GetType();
+
+            MethodInfo addScriptMethod = null;
+            foreach (var m in coreWebView2Type.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (m.Name == "AddScriptToExecuteOnDocumentCreatedAsync" && m.GetParameters().Length == 1)
+                {
+                    addScriptMethod = m;
+                    break;
+                }
+            }
+
+            MethodInfo navigateToStringMethod = null;
+            foreach (var m in coreWebView2Type.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (m.Name == "NavigateToString" && m.GetParameters().Length == 1)
+                {
+                    navigateToStringMethod = m;
+                    break;
+                }
+            }
+
+            if (addScriptMethod == null || navigateToStringMethod == null)
+            {
+                throw new Exception("AddScriptAndNavigateToString: could not find required CoreWebView2 methods");
+            }
+
+            var task = (Task)addScriptMethod.Invoke(coreWebView2, new object[] { script });
+            var capturedNavigateToStringMethod = navigateToStringMethod;
+            var capturedCoreWebView2           = coreWebView2;
+            var capturedHtml                   = html;
+            var capturedContext                = PsHost.MainSyncContext;
+
+            task.ContinueWith(delegate(Task t)
+            {
+                if (capturedContext != null)
+                {
+                    capturedContext.Post(delegate(object state)
+                    {
+                        try { capturedNavigateToStringMethod.Invoke(capturedCoreWebView2, new object[] { capturedHtml }); }
+                        catch { }
+                    }, null);
+                }
+            });
+
+            return new Dictionary<string, object> { { "type", "void" } };
+        }
+
         if (action == "StartApplication")
         {
             var appId    = cmd["appId"].ToString();
