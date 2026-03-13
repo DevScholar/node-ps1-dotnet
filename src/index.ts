@@ -40,7 +40,7 @@ function doInitialize() {
         throw new Error('node-ps1-dotnet is only supported on Windows. Use node-with-gjs for Linux/macOS.');
     }
     
-    const pipeName = `PsNode_${process.pid}_${Math.floor(Math.random() * 10000)}`;
+    const pipeName = `PsNode_${process.pid}_${Math.random().toString(36).slice(2, 10)}`;
     const scriptPath = path.join(__dirname, '..', 'scripts', 'PsHost.ps1');
 
     if (!fs.existsSync(scriptPath)) {
@@ -66,7 +66,8 @@ function doInitialize() {
     setProc(proc);
     proc.unref();
 
-    proc.on('exit', (code) => {
+    proc.on('exit', () => {
+        cleanup();
         process.exit(0);
     });
 
