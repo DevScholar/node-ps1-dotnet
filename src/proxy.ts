@@ -98,27 +98,40 @@ export function ensureMemberTypeCached(id: string, memberName: string, memberCac
 }
 
 export function createLazyArray(arr: any[]): any {
+    // Materialize a fully-proxied copy of the array on demand.
+    function proxied(): any[] {
+        return arr.map((item: any) => createProxy(item));
+    }
+
     return new Proxy(arr, {
         get(target, prop) {
-            if (typeof prop === 'symbol') return (target as any)[prop];
-            const index = Number(prop);
-            if (!isNaN(index) && index >= 0 && index < target.length) {
-                return createProxy(target[index]);
-            }
             if (prop === 'length') return target.length;
-            if (prop === 'map' || prop === 'filter' || prop === 'forEach' || prop === 'reduce') {
-                return (...args: any[]) => {
-                    const transformed = target.map((item: any) => createProxy(item));
-                    const method = (transformed as any)[prop];
-                    return method.call(transformed, ...args);
+
+            // Index access: proxy individual items without materializing the whole array.
+            if (typeof prop === 'string') {
+                const index = Number(prop);
+                if (!isNaN(index) && index >= 0 && index < target.length) {
+                    return createProxy(target[index]);
+                }
+            }
+
+            // Symbol.iterator: generator that proxies items one-by-one (no full copy).
+            if (prop === Symbol.iterator) {
+                return function* () {
+                    for (let i = 0; i < target.length; i++) {
+                        yield createProxy(target[i]);
+                    }
                 };
             }
-            if (prop === 'slice') {
-                return (...args: any[]) => {
-                    const sliced = target.slice(...args);
-                    return sliced.map((item: any) => createProxy(item));
-                };
+
+            // Other symbols: forward to the underlying array.
+            if (typeof prop === 'symbol') return (target as any)[prop];
+
+            // All named array methods: materialize and delegate.
+            if (typeof (target as any)[prop] === 'function') {
+                return (...args: any[]) => (proxied() as any)[prop](...args);
             }
+
             return undefined;
         }
     });

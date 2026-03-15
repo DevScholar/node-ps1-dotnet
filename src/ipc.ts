@@ -23,6 +23,11 @@ export class IpcSync {
     ) {}
 
     private readLineSync(): string | null {
+        // NOTE: fs.readSync is a blocking call that suspends the entire Node.js thread.
+        // While blocked here, no timers, events, or process.on('exit') callbacks can run.
+        // A true read timeout would require moving IPC into a Worker thread (architectural change).
+        // Mitigation: if the .NET pipe is closed (process crash/exit), readSync returns 0 bytes
+        // or throws, which surfaces as "Pipe closed (Read EOF)" in send().
         let resultOffset = 0;
         
         while (true) {

@@ -239,9 +239,13 @@ public static class Reflection
                 }
                 else
                 {
-                    // Delegates with 3+ parameters: not supported, event will be silently ignored.
-                    // Most real-world events use 0, 1, or 2 parameters.
-                    handler = null;
+                    return new Dictionary<string, object>
+                    {
+                        { "type", "error" },
+                        { "message", string.Format(
+                            "Cannot subscribe to event '{0}': its delegate type '{1}' has {2} parameters. Only events with 0, 1, or 2 parameters are supported.",
+                            eventName, delegateType.Name, parameters.Length) }
+                    };
                 }
 
                 eventInfo.AddEventHandler(target, handler);
@@ -689,6 +693,49 @@ public static class Reflection
         if (action == "Release")
         {
             Protocol.RemoveBridgeObject(cmd["targetId"].ToString());
+            return new Dictionary<string, object> { { "type", "void" } };
+        }
+
+        if (action == "SetResolvingCallback")
+        {
+            var cbId = cmd["callbackId"].ToString();
+
+            AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+            {
+                var writer = BridgeState.Writer;
+                if (writer == null) return null;
+
+                var protoArgs = new List<Dictionary<string, object>>();
+                protoArgs.Add(new Dictionary<string, object> { { "type", "primitive" }, { "value", args.Name } });
+
+                var msg = new Dictionary<string, object>
+                {
+                    { "type", "event" },
+                    { "callbackId", cbId },
+                    { "args", protoArgs }
+                };
+                var json = SimpleJson.Serialize(msg);
+                writer.WriteLine(json);
+
+                object result = null;
+                try
+                {
+                    if (PsHost.ProcessNestedCommands != null)
+                        result = PsHost.ProcessNestedCommands();
+                }
+                catch { }
+
+                if (result is string)
+                {
+                    var filePath = (string)result;
+                    if (filePath.Length > 0)
+                    {
+                        try { return Assembly.LoadFrom(filePath); } catch { }
+                    }
+                }
+                return null;
+            };
+
             return new Dictionary<string, object> { { "type", "void" } };
         }
         
