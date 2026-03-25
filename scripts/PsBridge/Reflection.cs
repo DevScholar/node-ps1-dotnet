@@ -148,94 +148,54 @@ public static class Reflection
 
                 if (parameters.Length == 0)
                 {
-                    Action handler0 = () =>
-                    {
-                        var writer = BridgeState.Writer;
-                        if (writer == null) return;
-                        var msg = new Dictionary<string, object>
-                        {
-                            { "type", "event" },
-                            { "callbackId", cbId },
-                            { "args", new List<Dictionary<string, object>>() }
-                        };
-                        var json = SimpleJson.Serialize(msg);
-                        if (BridgeState.UseQueueMode) { BridgeState.EventQueue.Enqueue(json); }
-                        else { writer.WriteLine(json); try { if (PsHost.ProcessNestedCommands != null) PsHost.ProcessNestedCommands(); } catch { } }
-                    };
-                    handler = Delegate.CreateDelegate(delegateType, handler0.Target, handler0.Method);
+                    Action h0 = () => SendEventToJs(cbId, new object[0]);
+                    handler = Delegate.CreateDelegate(delegateType, h0.Target, h0.Method);
                 }
                 else if (parameters.Length == 1)
                 {
-                    Action<object> handler1 = (arg) =>
-                    {
-                        var writer = BridgeState.Writer;
-                        if (writer == null) return;
-                        var protoArgs = new List<Dictionary<string, object>>();
-                        protoArgs.Add(arg == null
-                            ? new Dictionary<string, object> { { "type", "null" } }
-                            : Protocol.ConvertToProtocol(arg));
-                        var msg = new Dictionary<string, object>
-                        {
-                            { "type", "event" },
-                            { "callbackId", cbId },
-                            { "args", protoArgs }
-                        };
-                        var json = SimpleJson.Serialize(msg);
-                        if (BridgeState.UseQueueMode) { BridgeState.EventQueue.Enqueue(json); }
-                        else { writer.WriteLine(json); try { if (PsHost.ProcessNestedCommands != null) PsHost.ProcessNestedCommands(); } catch { } }
-                    };
-                    handler = Delegate.CreateDelegate(delegateType, handler1.Target, handler1.Method);
+                    Action<object> h1 = (a1) => SendEventToJs(cbId, new object[] { a1 });
+                    handler = Delegate.CreateDelegate(delegateType, h1.Target, h1.Method);
                 }
                 else if (parameters.Length == 2)
                 {
-                    var senderType = parameters[0].ParameterType;
-                    var eType = parameters[1].ParameterType;
-                    
-                    Action<object, object> handlerAction = (sender, e) =>
-                    {
-                        var writer = BridgeState.Writer;
-                        if (writer == null) return;
-                        
-                        var protoArgs = new List<Dictionary<string, object>>();
-                        
-                        foreach (var arg in new object[] { sender, e })
-                        {
-                            if (arg == null)
-                            {
-                                protoArgs.Add(new Dictionary<string, object> { { "type", "null" } });
-                            }
-                            else
-                            {
-                                protoArgs.Add(Protocol.ConvertToProtocol(arg));
-                            }
-                        }
-                        
-                        var msg = new Dictionary<string, object>
-                        {
-                            { "type", "event" },
-                            { "callbackId", cbId },
-                            { "args", protoArgs }
-                        };
-                        
-                        var json = SimpleJson.Serialize(msg);
-
-                        if (BridgeState.UseQueueMode)
-                        {
-                            BridgeState.EventQueue.Enqueue(json);
-                        }
-                        else
-                        {
-                            writer.WriteLine(json);
-                            try
-                            {
-                                if (PsHost.ProcessNestedCommands != null)
-                                    PsHost.ProcessNestedCommands();
-                            }
-                            catch { }
-                        }
-                    };
-
-                    handler = Delegate.CreateDelegate(delegateType, handlerAction.Target, handlerAction.Method);
+                    Action<object, object> h2 = (a1, a2) => SendEventToJs(cbId, new object[] { a1, a2 });
+                    handler = Delegate.CreateDelegate(delegateType, h2.Target, h2.Method);
+                }
+                else if (parameters.Length == 3)
+                {
+                    Action<object, object, object> h3 = (a1, a2, a3) =>
+                        SendEventToJs(cbId, new object[] { a1, a2, a3 });
+                    handler = Delegate.CreateDelegate(delegateType, h3.Target, h3.Method);
+                }
+                else if (parameters.Length == 4)
+                {
+                    Action<object, object, object, object> h4 = (a1, a2, a3, a4) =>
+                        SendEventToJs(cbId, new object[] { a1, a2, a3, a4 });
+                    handler = Delegate.CreateDelegate(delegateType, h4.Target, h4.Method);
+                }
+                else if (parameters.Length == 5)
+                {
+                    Action<object, object, object, object, object> h5 = (a1, a2, a3, a4, a5) =>
+                        SendEventToJs(cbId, new object[] { a1, a2, a3, a4, a5 });
+                    handler = Delegate.CreateDelegate(delegateType, h5.Target, h5.Method);
+                }
+                else if (parameters.Length == 6)
+                {
+                    Action<object, object, object, object, object, object> h6 = (a1, a2, a3, a4, a5, a6) =>
+                        SendEventToJs(cbId, new object[] { a1, a2, a3, a4, a5, a6 });
+                    handler = Delegate.CreateDelegate(delegateType, h6.Target, h6.Method);
+                }
+                else if (parameters.Length == 7)
+                {
+                    Action<object, object, object, object, object, object, object> h7 = (a1, a2, a3, a4, a5, a6, a7) =>
+                        SendEventToJs(cbId, new object[] { a1, a2, a3, a4, a5, a6, a7 });
+                    handler = Delegate.CreateDelegate(delegateType, h7.Target, h7.Method);
+                }
+                else if (parameters.Length == 8)
+                {
+                    Action<object, object, object, object, object, object, object, object> h8 = (a1, a2, a3, a4, a5, a6, a7, a8) =>
+                        SendEventToJs(cbId, new object[] { a1, a2, a3, a4, a5, a6, a7, a8 });
+                    handler = Delegate.CreateDelegate(delegateType, h8.Target, h8.Method);
                 }
                 else
                 {
@@ -243,7 +203,7 @@ public static class Reflection
                     {
                         { "type", "error" },
                         { "message", string.Format(
-                            "Cannot subscribe to event '{0}': its delegate type '{1}' has {2} parameters. Only events with 0, 1, or 2 parameters are supported.",
+                            "Cannot subscribe to event '{0}': its delegate type '{1}' has {2} parameters. Only events with up to 8 parameters are supported.",
                             eventName, delegateType.Name, parameters.Length) }
                     };
                 }
@@ -355,6 +315,25 @@ public static class Reflection
 
             var isStatic = target is Type;
             var targetType = isStatic ? (Type)target : target.GetType();
+
+            // Detect ref/out methods early and dispatch to dedicated handler.
+            // node-api-dotnet style: C# bool F(ref string a, out int b) => JS { result, a, b }
+            {
+                var bindingFlagsCheck = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy | BindingFlags.IgnoreCase;
+                var methodsCheck = targetType.GetMethods(bindingFlagsCheck);
+                foreach (var m in methodsCheck)
+                {
+                    if (m.Name != name) continue;
+                    foreach (var p in m.GetParameters())
+                    {
+                        if (p.IsOut || p.ParameterType.IsByRef)
+                        {
+                            return InvokeRefOutMethod(targetType, name, isStatic,
+                                isStatic ? null : target, realArgs, bindingFlagsCheck);
+                        }
+                    }
+                }
+            }
 
             if (isStatic && realArgs.Length == 0)
             {
@@ -775,17 +754,19 @@ public static class Reflection
             else if (pType == typeof(TimeSpan))
             {
                 if (arg is long)
-                {
                     convertedArgs[i] = TimeSpan.FromMilliseconds((long)arg);
-                }
                 else if (arg is int)
-                {
                     convertedArgs[i] = TimeSpan.FromMilliseconds((int)arg);
-                }
                 else if (arg is double)
-                {
                     convertedArgs[i] = TimeSpan.FromMilliseconds((double)arg);
-                }
+            }
+            else if ((pType == typeof(DateTime) || pType == typeof(DateTimeOffset)) && arg is string)
+            {
+                DateTime dt;
+                if (DateTime.TryParse((string)arg, null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out dt))
+                    convertedArgs[i] = pType == typeof(DateTimeOffset)
+                        ? (object)new DateTimeOffset(dt) : dt;
             }
             else if (argType == typeof(string) && (pType == typeof(string) || pType == typeof(object)))
             {
@@ -820,7 +801,10 @@ public static class Reflection
         foreach (var method in methods)
         {
             var parameters = method.GetParameters();
-            if (parameters.Length != args.Length) continue;
+            // Count only non-out params for arity matching (out params are output-only)
+            var nonOutCount = 0;
+            foreach (var p in parameters) { if (!p.IsOut) nonOutCount++; }
+            if (nonOutCount != args.Length) continue;
             
             var match = true;
             for (var i = 0; i < parameters.Length; i++)
@@ -877,6 +861,136 @@ public static class Reflection
         return null;
     }
     
+    // Convert a single JS argument to the expected .NET type.
+    private static object ConvertSingleArg(object arg, Type targetType)
+    {
+        if (arg == null) return targetType.IsValueType ? Activator.CreateInstance(targetType) : null;
+        if (targetType.IsAssignableFrom(arg.GetType())) return arg;
+        if (targetType.IsEnum && (arg is int || arg is long))
+            return Enum.ToObject(targetType, arg is long ? (int)(long)arg : (int)arg);
+        if (targetType == typeof(TimeSpan) && (arg is long || arg is int || arg is double))
+            return TimeSpan.FromMilliseconds(Convert.ToDouble(arg));
+        if ((targetType == typeof(DateTime) || targetType == typeof(DateTimeOffset)) && arg is string)
+        {
+            DateTime dt;
+            if (DateTime.TryParse((string)arg, null,
+                System.Globalization.DateTimeStyles.RoundtripKind, out dt))
+                return targetType == typeof(DateTimeOffset) ? (object)new DateTimeOffset(dt) : dt;
+        }
+        if (IsNumericType(arg.GetType()) && IsNumericType(targetType))
+        {
+            try { return Convert.ChangeType(arg, targetType); } catch { }
+        }
+        if (arg is IConvertible && targetType != typeof(string))
+        {
+            try { return Convert.ChangeType(arg, targetType); } catch { }
+        }
+        return arg;
+    }
+
+    // Invoke a method that has ref/out parameters.
+    // node-api-dotnet style: C# bool F(ref string a, out int b) => JS { result, a, b }
+    private static Dictionary<string, object> InvokeRefOutMethod(
+        Type targetType, string name, bool isStatic, object target,
+        object[] realArgs, BindingFlags bindingFlags)
+    {
+        var methods = targetType.GetMethods(bindingFlags);
+        MethodInfo bestMethod = null;
+        foreach (var m in methods)
+        {
+            if (m.Name != name) continue;
+            var parms = m.GetParameters();
+            var nonOutCount = 0;
+            foreach (var p in parms) { if (!p.IsOut) nonOutCount++; }
+            if (nonOutCount == realArgs.Length) { bestMethod = m; break; }
+        }
+        if (bestMethod == null)
+            throw new Exception("No matching ref/out overload found for: " + name);
+
+        var parameters = bestMethod.GetParameters();
+        var invokeArgs = new object[parameters.Length];
+        var inputIdx = 0;
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var p = parameters[i];
+            var actualType = p.ParameterType.IsByRef ? p.ParameterType.GetElementType() : p.ParameterType;
+            if (p.IsOut)
+                invokeArgs[i] = actualType.IsValueType ? Activator.CreateInstance(actualType) : null;
+            else
+            {
+                var rawArg = inputIdx < realArgs.Length ? realArgs[inputIdx] : null;
+                invokeArgs[i] = ConvertSingleArg(rawArg, actualType);
+                inputIdx++;
+            }
+        }
+
+        object result = null;
+        try
+        {
+            result = bestMethod.Invoke(isStatic ? null : target, invokeArgs);
+        }
+        catch (TargetInvocationException ex)
+        {
+            var inner = ex.InnerException != null ? ex.InnerException.Message : ex.Message;
+            throw new Exception("Invoke Error (" + name + "): " + inner);
+        }
+
+        // Collect ref/out output values
+        var outs = new Dictionary<string, object>();
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var p = parameters[i];
+            if (!p.IsOut && !p.ParameterType.IsByRef) continue;
+            outs[p.Name] = invokeArgs[i] == null
+                ? new Dictionary<string, object> { { "type", "null" } }
+                : Protocol.ConvertToProtocol(invokeArgs[i]);
+        }
+
+        var resultProto = result == null
+            ? new Dictionary<string, object> { { "type", "null" } }
+            : Protocol.ConvertToProtocol(result);
+
+        // Non-void method with no actual out/ref outputs: return plain result
+        if (outs.Count == 0)
+            return resultProto;
+
+        return new Dictionary<string, object>
+        {
+            { "type", "refout" },
+            { "result", resultProto },
+            { "outs", outs }
+        };
+    }
+
+    private static void SendEventToJs(string cbId, object[] args)
+    {
+        var writer = BridgeState.Writer;
+        if (writer == null) return;
+        var protoArgs = new List<Dictionary<string, object>>();
+        foreach (var arg in args)
+        {
+            protoArgs.Add(arg == null
+                ? new Dictionary<string, object> { { "type", "null" } }
+                : Protocol.ConvertToProtocol(arg));
+        }
+        var msg = new Dictionary<string, object>
+        {
+            { "type", "event" },
+            { "callbackId", cbId },
+            { "args", protoArgs }
+        };
+        var json = SimpleJson.Serialize(msg);
+        if (BridgeState.UseQueueMode)
+        {
+            BridgeState.EventQueue.Enqueue(json);
+        }
+        else
+        {
+            writer.WriteLine(json);
+            try { if (PsHost.ProcessNestedCommands != null) PsHost.ProcessNestedCommands(); } catch { }
+        }
+    }
+
     private static string InferFrameworkMoniker()
     {
         var frameworkDescription = RuntimeInformation.FrameworkDescription;

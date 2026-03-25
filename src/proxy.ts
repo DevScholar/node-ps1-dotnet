@@ -146,13 +146,16 @@ function marshalArgs(args: any[]): any[] {
             callbackRegistry.set(cbId, a);
             return { type: 'callback', callbackId: cbId };
         }
+        // Date → ISO string so C# ConvertArgsForMethod can parse to DateTime/DateTimeOffset
+        if (a instanceof Date) return a.toISOString();
         return a;
     });
 }
 
 // Core proxy factory for a .NET object reference.
 // inlineProps: pre-fetched property values attached to event args, avoids extra round-trips.
-function makeRefProxy(id: string, inlineProps?: Record<string, any>): any {
+// hasIndexer: true when the .NET type exposes a get_Item/set_Item indexer (e.g. IList, custom indexers).
+function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?: boolean): any {
     const ipc = getIpc();
 
     if (!typeMetadataCache.has(id)) {
@@ -163,10 +166,19 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>): any {
     class Stub {}
 
     const proxy = new Proxy(Stub, {
-        get: (_target: any, prop: string) => {
+        get: (_target: any, prop: string | symbol) => {
             if (prop === '__ref') return id;
             if (prop === '__inlineProps') return inlineProps;
-            if (typeof prop !== 'string') return undefined;
+            if (typeof prop === 'symbol') return undefined;
+
+            // Numeric index → .NET indexer (obj[0], obj[1], ...)
+            if (hasIndexer) {
+                const idx = Number(prop);
+                if (!isNaN(idx) && idx >= 0 && String(idx) === prop) {
+                    const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: 'get_Item', args: [idx] });
+                    return createProxy(res);
+                }
+            }
 
             // Fast path: use pre-fetched inline props (typically on event args).
             if (inlineProps && Object.prototype.hasOwnProperty.call(inlineProps, prop)) {
@@ -200,8 +212,17 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>): any {
             }
         },
 
-        set: (_target: any, prop: string, value: any) => {
-            if (typeof prop !== 'string') return false;
+        set: (_target: any, prop: string | symbol, value: any) => {
+            if (typeof prop === 'symbol') return false;
+            // Numeric index → .NET indexer set
+            if (hasIndexer) {
+                const idx = Number(prop);
+                if (!isNaN(idx) && idx >= 0 && String(idx) === prop) {
+                    const netVal = (value && value.__ref) ? { __ref: value.__ref } : marshalArgs([value])[0];
+                    ipc!.send({ action: 'Invoke', targetId: id, methodName: 'set_Item', args: [idx, netVal] });
+                    return true;
+                }
+            }
             const netArg = (value && value.__ref) ? { __ref: value.__ref } : value;
             ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [netArg] });
             memberCache.set(prop, 'property');
@@ -222,13 +243,34 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>): any {
 
 export function createProxyWithInlineProps(meta: any): any {
     if (meta.type !== 'ref') return createProxy(meta);
-    return makeRefProxy(meta.id, meta.props || {});
+    return makeRefProxy(meta.id, meta.props || {}, meta.hasIndexer === true);
 }
 
 export function createProxy(meta: any): any {
     const ipc = getIpc();
 
     if (meta.type === 'primitive' || meta.type === 'null') return meta.value;
+
+    // DateTime/DateTimeOffset → JS Date  (node-api-dotnet: DateTime => Date)
+    if (meta.type === 'date') return new Date(meta.value);
+
+    // IDictionary<K,V> → JS Map<K,V>  (node-api-dotnet: IDictionary<K,V> => Map<K,V>)
+    if (meta.type === 'map') {
+        const entries: [any, any][] = (meta.entries as any[][]).map(
+            (pair: any[]) => [createProxy(pair[0]), createProxy(pair[1])] as [any, any]
+        );
+        return new Map(entries);
+    }
+
+    // ref/out return — node-api-dotnet style: { result, outParam1, outParam2, ... }
+    if (meta.type === 'refout') {
+        const out: Record<string, any> = { result: createProxy(meta.result) };
+        const outs = meta.outs as Record<string, any>;
+        for (const key of Object.keys(outs)) {
+            out[key] = createProxy(outs[key]);
+        }
+        return out;
+    }
 
     if (meta.type === 'array') {
         const arr = meta.value;
@@ -271,5 +313,5 @@ export function createProxy(meta: any): any {
 
     if (meta.type !== 'ref') return null;
 
-    return makeRefProxy(meta.id);
+    return makeRefProxy(meta.id, undefined, meta.hasIndexer === true);
 }
