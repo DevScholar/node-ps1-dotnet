@@ -13,14 +13,41 @@ export function getNodePs1Dotnet() {
     throw new Error('node_ps1_dotnet not initialized');
 }
 
-const gcRegistry = new FinalizationRegistry((id: string) => {
-    try { getNodePs1Dotnet()._release(id); } catch {}
-});
-
 export const callbackRegistry = new Map<string, Function>();
 export const typeMetadataCache = new Map<string, Map<string, string>>();
 export const globalTypeCache = new Map<string, Map<string, string>>();
 export const typeNameCache = new Map<string, string>();
+
+// Tracks event subscriptions per .NET object: objectId → Map<cbId, {callback, eventName}>.
+// Used to clean up callbackRegistry entries when an object is released (GC or manual).
+const objectEventMap = new Map<string, Map<string, { callback: Function; eventName: string }>>();
+
+// Cleans up all JS-side state for a released object id.
+// Called both from FinalizationRegistry and from releaseObject().
+function cleanupObjectById(id: string): void {
+    typeMetadataCache.delete(id);
+    typeNameCache.delete(id);
+    const events = objectEventMap.get(id);
+    if (events) {
+        for (const cbId of events.keys()) callbackRegistry.delete(cbId);
+        objectEventMap.delete(id);
+    }
+}
+
+// Immediately releases a .NET proxy: cleans up JS maps and sends Release IPC.
+// Use this instead of waiting for V8 GC when you want deterministic cleanup,
+// e.g. for IDisposable objects (Streams, bitmaps) or large object graphs.
+export function releaseObject(proxy: any): void {
+    const id: unknown = proxy?.__ref;
+    if (typeof id !== 'string') return;
+    cleanupObjectById(id);
+    try { getNodePs1Dotnet()._release(id); } catch {}
+}
+
+const gcRegistry = new FinalizationRegistry((id: string) => {
+    cleanupObjectById(id);
+    try { getNodePs1Dotnet()._release(id); } catch {}
+});
 
 // When true (after startApplication), Task results are fire-and-forget instead of
 // synchronously blocked via AwaitTask. This prevents deadlocks in polling mode where
@@ -191,7 +218,29 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
                 return (callback: Function) => {
                     const cbId = `cb_${Date.now()}_${Math.random()}`;
                     callbackRegistry.set(cbId, callback);
+                    // Track so this callback is cleaned up when the object is released
+                    if (!objectEventMap.has(id)) objectEventMap.set(id, new Map());
+                    objectEventMap.get(id)!.set(cbId, { callback, eventName });
                     ipc!.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
+                };
+            }
+
+            // remove_EventName(callback) — mirrors .NET event -= pattern
+            if (prop.startsWith('remove_')) {
+                const eventName = prop.substring(7);
+                return (callback: Function) => {
+                    const events = objectEventMap.get(id);
+                    if (!events) return;
+                    for (const [cbId, entry] of events) {
+                        if (entry.callback === callback && entry.eventName === eventName) {
+                            callbackRegistry.delete(cbId);
+                            events.delete(cbId);
+                            try {
+                                ipc!.send({ action: 'RemoveEvent', targetId: id, eventName, callbackId: cbId });
+                            } catch {}
+                            return;
+                        }
+                    }
                 };
             }
 

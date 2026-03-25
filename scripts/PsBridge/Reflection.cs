@@ -131,6 +131,29 @@ public static class Reflection
             return result;
         }
 
+        if (action == "RemoveEvent")
+        {
+            var targetId = cmd["targetId"].ToString();
+            var eventName = cmd["eventName"].ToString();
+            var cbId = cmd["callbackId"].ToString();
+            var storeKey = targetId + ":" + eventName + ":" + cbId;
+
+            Delegate handler;
+            if (BridgeState.EventHandlerStore.TryRemove(storeKey, out handler))
+            {
+                object target;
+                if (BridgeState.ObjectStore.TryGetValue(targetId, out target))
+                {
+                    var eventInfo = target.GetType().GetEvent(eventName);
+                    if (eventInfo != null)
+                    {
+                        try { eventInfo.RemoveEventHandler(target, handler); } catch { }
+                    }
+                }
+            }
+            return new Dictionary<string, object> { { "type", "void" } };
+        }
+
         if (action == "AddEvent")
         {
             var target = BridgeState.ObjectStore[cmd["targetId"].ToString()];
@@ -209,6 +232,9 @@ public static class Reflection
                 }
 
                 eventInfo.AddEventHandler(target, handler);
+                // Persist handler so RemoveEvent can unsubscribe later
+                var storeKey = cmd["targetId"].ToString() + ":" + eventName + ":" + cbId;
+                BridgeState.EventHandlerStore[storeKey] = handler;
             }
             
             return new Dictionary<string, object> { { "type", "void" } };
@@ -671,7 +697,18 @@ public static class Reflection
 
         if (action == "Release")
         {
-            Protocol.RemoveBridgeObject(cmd["targetId"].ToString());
+            var releaseId = cmd["targetId"].ToString();
+            // Remove all event handlers stored for this object so delegates can be GC'd
+            var prefix = releaseId + ":";
+            foreach (var key in BridgeState.EventHandlerStore.Keys.ToArray())
+            {
+                if (key.StartsWith(prefix))
+                {
+                    Delegate ignored;
+                    BridgeState.EventHandlerStore.TryRemove(key, out ignored);
+                }
+            }
+            Protocol.RemoveBridgeObject(releaseId);
             return new Dictionary<string, object> { { "type", "void" } };
         }
 

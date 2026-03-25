@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { getPowerShellPath } from './utils.js';
 import { IpcSync } from './ipc.js';
 import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.js';
-import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet, setPollingMode } from './proxy.js';
+import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet, setPollingMode, releaseObject } from './proxy.js';
+export { releaseObject };
 import { createNamespaceProxy, createExportNamespaceProxy } from './namespace.js';
 
 export const __filename = fileURLToPath(import.meta.url);

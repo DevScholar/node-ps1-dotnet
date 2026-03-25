@@ -19,10 +19,15 @@ public static class BridgeState
     // When true, AddEvent handlers enqueue instead of blocking on ProcessNestedCommands
     public static bool UseQueueMode { get; set; }
 
+    // Stores event handler delegates keyed by "{targetId}:{eventName}:{callbackId}".
+    // Required for RemoveEvent and for bulk cleanup when a target object is Released.
+    public static ConcurrentDictionary<string, Delegate> EventHandlerStore { get; private set; }
+
     static BridgeState()
     {
         ObjectStore = new ConcurrentDictionary<string, object>();
         EventQueue = new ConcurrentQueue<string>();
         UseQueueMode = false;
+        EventHandlerStore = new ConcurrentDictionary<string, Delegate>();
     }
 }
