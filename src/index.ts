@@ -144,13 +144,6 @@ export const node_ps1_dotnet = {
         return createProxy(res);
     },
 
-    _loadFrom(filePath: string): any {
-        doInitialize();
-        const ipc = getIpc();
-        const res = ipc!.send({ action: 'LoadFrom', filePath });
-        return createProxy(res);
-    },
-
     _getRuntimeInfo(): { frameworkMoniker: string; runtimeVersion: string } {
         if (getCachedRuntimeInfo()) return getCachedRuntimeInfo()!;
         doInitialize();
@@ -184,7 +177,8 @@ const dotnetProxy = new Proxy(function() {} as any, {
         if (prop === 'load') return (nameOrPath: string) => {
             if (nameOrPath.includes('/') || nameOrPath.includes('\\') ||
                 nameOrPath.endsWith('.dll') || nameOrPath.endsWith('.exe')) {
-                return node_ps1_dotnet._loadFrom(nameOrPath);
+                const res = getIpc()!.send({ action: 'LoadFrom', filePath: nameOrPath });
+                return createProxy(res);
             } else {
                 return node_ps1_dotnet._loadAssembly(nameOrPath);
             }
