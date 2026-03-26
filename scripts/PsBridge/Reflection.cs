@@ -167,69 +167,26 @@ public static class Reflection
                 var invokeMethod = delegateType.GetMethod("Invoke");
                 var parameters = invokeMethod.GetParameters();
                 
-                Delegate handler = null;
+                // Build a lambda matching the exact delegate signature, box all args, call SendEventToJs.
+                // Expression.Lambda handles any parameter count with no fixed upper limit.
+                var paramExprs = new System.Linq.Expressions.ParameterExpression[parameters.Length];
+                for (var pi = 0; pi < parameters.Length; pi++)
+                {
+                    paramExprs[pi] = System.Linq.Expressions.Expression.Parameter(parameters[pi].ParameterType, "p" + pi);
+                }
 
-                if (parameters.Length == 0)
+                var boxedExprs = new System.Linq.Expressions.Expression[parameters.Length];
+                for (var pi = 0; pi < parameters.Length; pi++)
                 {
-                    Action h0 = () => SendEventToJs(cbId, new object[0]);
-                    handler = Delegate.CreateDelegate(delegateType, h0.Target, h0.Method);
+                    boxedExprs[pi] = System.Linq.Expressions.Expression.Convert(paramExprs[pi], typeof(object));
                 }
-                else if (parameters.Length == 1)
-                {
-                    Action<object> h1 = (a1) => SendEventToJs(cbId, new object[] { a1 });
-                    handler = Delegate.CreateDelegate(delegateType, h1.Target, h1.Method);
-                }
-                else if (parameters.Length == 2)
-                {
-                    Action<object, object> h2 = (a1, a2) => SendEventToJs(cbId, new object[] { a1, a2 });
-                    handler = Delegate.CreateDelegate(delegateType, h2.Target, h2.Method);
-                }
-                else if (parameters.Length == 3)
-                {
-                    Action<object, object, object> h3 = (a1, a2, a3) =>
-                        SendEventToJs(cbId, new object[] { a1, a2, a3 });
-                    handler = Delegate.CreateDelegate(delegateType, h3.Target, h3.Method);
-                }
-                else if (parameters.Length == 4)
-                {
-                    Action<object, object, object, object> h4 = (a1, a2, a3, a4) =>
-                        SendEventToJs(cbId, new object[] { a1, a2, a3, a4 });
-                    handler = Delegate.CreateDelegate(delegateType, h4.Target, h4.Method);
-                }
-                else if (parameters.Length == 5)
-                {
-                    Action<object, object, object, object, object> h5 = (a1, a2, a3, a4, a5) =>
-                        SendEventToJs(cbId, new object[] { a1, a2, a3, a4, a5 });
-                    handler = Delegate.CreateDelegate(delegateType, h5.Target, h5.Method);
-                }
-                else if (parameters.Length == 6)
-                {
-                    Action<object, object, object, object, object, object> h6 = (a1, a2, a3, a4, a5, a6) =>
-                        SendEventToJs(cbId, new object[] { a1, a2, a3, a4, a5, a6 });
-                    handler = Delegate.CreateDelegate(delegateType, h6.Target, h6.Method);
-                }
-                else if (parameters.Length == 7)
-                {
-                    Action<object, object, object, object, object, object, object> h7 = (a1, a2, a3, a4, a5, a6, a7) =>
-                        SendEventToJs(cbId, new object[] { a1, a2, a3, a4, a5, a6, a7 });
-                    handler = Delegate.CreateDelegate(delegateType, h7.Target, h7.Method);
-                }
-                else if (parameters.Length == 8)
-                {
-                    Action<object, object, object, object, object, object, object, object> h8 = (a1, a2, a3, a4, a5, a6, a7, a8) =>
-                        SendEventToJs(cbId, new object[] { a1, a2, a3, a4, a5, a6, a7, a8 });
-                    handler = Delegate.CreateDelegate(delegateType, h8.Target, h8.Method);
-                }
-                else
-                {
-                    return new Dictionary<string, object>
-                    {
-                        { "type", "error" },
-                        { "message", string.Format(
-                            "Cannot subscribe to event '{0}': its delegate type '{1}' has {2} parameters. Only events with up to 8 parameters are supported.",
-                            eventName, delegateType.Name, parameters.Length) }
-                    };
-                }
+
+                var argsArrayExpr = System.Linq.Expressions.Expression.NewArrayInit(typeof(object), boxedExprs);
+                var sendMethod = typeof(Reflection).GetMethod("SendEventToJs", BindingFlags.NonPublic | BindingFlags.Static);
+                var cbIdExpr = System.Linq.Expressions.Expression.Constant(cbId, typeof(string));
+                var callExpr = System.Linq.Expressions.Expression.Call(sendMethod, cbIdExpr, argsArrayExpr);
+                var lambdaExpr = System.Linq.Expressions.Expression.Lambda(delegateType, callExpr, paramExprs);
+                Delegate handler = lambdaExpr.Compile();
 
                 eventInfo.AddEventHandler(target, handler);
                 // Persist handler so RemoveEvent can unsubscribe later
