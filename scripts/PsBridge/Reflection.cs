@@ -78,14 +78,18 @@ public static class Reflection
         if (action == "GetTypeName")
         {
             var target = BridgeState.ObjectStore[cmd["targetId"].ToString()];
-            var typeName = target.GetType().FullName;
+            string typeName;
+            if (target is Type)
+                typeName = ((Type)target).FullName;
+            else
+                typeName = target.GetType().FullName;
             return new Dictionary<string, object> { { "typeName", typeName } };
         }
 
         if (action == "InspectType")
         {
             var typeName = cmd["typeName"].ToString();
-            var rawList = cmd["memberNames"] as System.Collections.Generic.List<object>;
+            var rawList = cmd["memberNames"] as System.Collections.IEnumerable;
             var emptyResult = new Dictionary<string, object>
             {
                 { "typeName", typeName },
