@@ -450,7 +450,34 @@ public static class Reflection
                                 {
                                     try
                                     {
-                                        tempArgs[i] = Delegate.CreateDelegate(pType, func.Target, func.Method);
+                                        var invokeMeth = pType.GetMethod("Invoke");
+                                        var dlgParams = invokeMeth.GetParameters();
+                                        var pExprs = new System.Linq.Expressions.ParameterExpression[dlgParams.Length];
+                                        for (var pi = 0; pi < dlgParams.Length; pi++)
+                                            pExprs[pi] = System.Linq.Expressions.Expression.Parameter(dlgParams[pi].ParameterType, "p" + pi);
+
+                                        var callArgs = new System.Linq.Expressions.Expression[4];
+                                        for (var pi = 0; pi < 4; pi++)
+                                        {
+                                            if (pi < dlgParams.Length)
+                                                callArgs[pi] = System.Linq.Expressions.Expression.Convert(pExprs[pi], typeof(object));
+                                            else
+                                                callArgs[pi] = System.Linq.Expressions.Expression.Constant(null, typeof(object));
+                                        }
+
+                                        var funcConst = System.Linq.Expressions.Expression.Constant(func);
+                                        var funcInvokeMeth = typeof(Func<object, object, object, object, object>).GetMethod("Invoke");
+                                        var callExpr = System.Linq.Expressions.Expression.Call(funcConst, funcInvokeMeth, callArgs);
+
+                                        System.Linq.Expressions.Expression body;
+                                        if (invokeMeth.ReturnType == typeof(void))
+                                            body = System.Linq.Expressions.Expression.Block(
+                                                callExpr,
+                                                System.Linq.Expressions.Expression.Empty());
+                                        else
+                                            body = System.Linq.Expressions.Expression.Convert(callExpr, invokeMeth.ReturnType);
+
+                                        tempArgs[i] = System.Linq.Expressions.Expression.Lambda(pType, body, pExprs).Compile();
                                     }
                                     catch
                                     {
