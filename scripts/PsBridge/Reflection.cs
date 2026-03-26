@@ -641,9 +641,48 @@ public static class Reflection
             }
             catch
             {
-#pragma warning disable 618
-                try { asm = Assembly.LoadWithPartialName(assemblyName); } catch { }
-#pragma warning restore 618
+                // Fallback 1: search already-loaded assemblies by simple name
+                foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (string.Equals(a.GetName().Name, assemblyName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        asm = a;
+                        break;
+                    }
+                }
+                // Fallback 2: probe the .NET runtime directory (handles framework assemblies like System.Windows.Forms)
+                if (asm == null)
+                {
+                    string runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+                    string dllPath = Path.Combine(runtimeDir, assemblyName + ".dll");
+                    if (File.Exists(dllPath))
+                    {
+                        try { asm = Assembly.LoadFrom(dllPath); } catch { }
+                    }
+                }
+                // Fallback 3: scan the .NET 4 GAC (handles WPF assemblies like PresentationFramework)
+                if (asm == null)
+                {
+                    string gacRoot = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                        @"Microsoft.NET\assembly");
+                    string[] subDirs = new string[] { "GAC_MSIL", "GAC_64", "GAC_32" };
+                    foreach (var subDir in subDirs)
+                    {
+                        string asmDir = Path.Combine(gacRoot, subDir, assemblyName);
+                        if (!Directory.Exists(asmDir)) continue;
+                        foreach (var verDir in Directory.GetDirectories(asmDir))
+                        {
+                            string gacDll = Path.Combine(verDir, assemblyName + ".dll");
+                            if (File.Exists(gacDll))
+                            {
+                                try { asm = Assembly.LoadFrom(gacDll); } catch { }
+                                if (asm != null) break;
+                            }
+                        }
+                        if (asm != null) break;
+                    }
+                }
             }
             if (asm == null)
             {
