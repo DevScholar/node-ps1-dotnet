@@ -4,8 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading.Tasks;
+using System.Web.Script.Serialization;
 
 public static class Protocol
 {
@@ -266,91 +266,8 @@ public static class SimpleJson
 {
     public static string Serialize(object obj)
     {
-        if (obj == null) return "null";
-        
-        if (obj is Dictionary<string, object>)
-        {
-            var dict = (Dictionary<string, object>)obj;
-            var parts = new List<string>();
-            foreach (var kvp in dict)
-            {
-                parts.Add(string.Format("\"{0}\":{1}", EscapeString(kvp.Key), Serialize(kvp.Value)));
-            }
-            return "{" + string.Join(",", parts.ToArray()) + "}";
-        }
-        
-        if (obj is List<Dictionary<string, object>>)
-        {
-            var list = (List<Dictionary<string, object>>)obj;
-            var parts = new List<string>();
-            foreach (var item in list)
-            {
-                parts.Add(Serialize(item));
-            }
-            return "[" + string.Join(",", parts.ToArray()) + "]";
-        }
-
-        if (obj is List<object>)
-        {
-            var list = (List<object>)obj;
-            var parts = new List<string>();
-            foreach (var item in list)
-            {
-                parts.Add(Serialize(item));
-            }
-            return "[" + string.Join(",", parts.ToArray()) + "]";
-        }
-
-        if (obj is object[])
-        {
-            var arr = (object[])obj;
-            var parts = new List<string>();
-            foreach (var item in arr)
-            {
-                parts.Add(Serialize(item));
-            }
-            return "[" + string.Join(",", parts.ToArray()) + "]";
-        }
-        
-        if (obj is string)
-        {
-            return "\"" + EscapeString((string)obj) + "\"";
-        }
-        
-        if (obj is bool)
-        {
-            return (bool)obj ? "true" : "false";
-        }
-        
-        if (obj == null)
-        {
-            return "null";
-        }
-        
-        if (obj.GetType().IsPrimitive || obj is decimal)
-        {
-            return obj.ToString();
-        }
-        
-        return "\"" + EscapeString(obj.ToString()) + "\"";
-    }
-    
-    private static string EscapeString(string s)
-    {
-        if (s == null) return "";
-        var sb = new StringBuilder();
-        foreach (var c in s)
-        {
-            switch (c)
-            {
-                case '\\': sb.Append("\\\\"); break;
-                case '"': sb.Append("\\\""); break;
-                case '\n': sb.Append("\\n"); break;
-                case '\r': sb.Append("\\r"); break;
-                case '\t': sb.Append("\\t"); break;
-                default: sb.Append(c); break;
-            }
-        }
-        return sb.ToString();
+        var ser = new JavaScriptSerializer();
+        ser.MaxJsonLength = int.MaxValue;
+        return ser.Serialize(obj);
     }
 }

@@ -14,7 +14,8 @@ $referencedAssemblies = @(
     'System.Core.dll',
     'System.Windows.Forms.dll',
     'System.Drawing.dll',
-    'System.Runtime.InteropServices.dll'
+    'System.Runtime.InteropServices.dll',
+    'System.Web.Extensions.dll'
 )
 
 Add-Type -Path $csFiles -ReferencedAssemblies $referencedAssemblies
