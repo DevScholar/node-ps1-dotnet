@@ -37,11 +37,7 @@ dotnet.load('./MyLib.dll');
 
 `load(nameOrPath)` automatically distinguishes between assembly names (without path separators and `.dll`/`.exe` extensions) and file paths.
 
-Explicit path loading also provides an alias:
 
-```typescript
-dotnet.loadFrom('./MyLib.dll');   // Equivalent to dotnet.load('./MyLib.dll')
-```
 
 ### Accessing Types
 
