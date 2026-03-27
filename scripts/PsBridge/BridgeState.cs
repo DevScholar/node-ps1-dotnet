@@ -13,21 +13,18 @@ public static class BridgeState
     public static NamedPipeServerStream PipeServer { get; set; }
     public static string PipeName { get; set; }
 
-    // Queue for events dispatched in polling mode (set by StartApplication)
-    public static ConcurrentQueue<string> EventQueue { get; set; }
-
-    // When true, AddEvent handlers enqueue instead of blocking on ProcessNestedCommands
-    public static bool UseQueueMode { get; set; }
-
     // Stores event handler delegates keyed by "{targetId}:{eventName}:{callbackId}".
     // Required for RemoveEvent and for bulk cleanup when a target object is Released.
     public static ConcurrentDictionary<string, Delegate> EventHandlerStore { get; private set; }
 
+    // Queue of serialized event JSON strings. Filled by SendEventToJs on any thread;
+    // drained by the Poll command on the UI/command thread.
+    public static ConcurrentQueue<string> EventQueue { get; private set; }
+
     static BridgeState()
     {
         ObjectStore = new ConcurrentDictionary<string, object>();
-        EventQueue = new ConcurrentQueue<string>();
-        UseQueueMode = false;
         EventHandlerStore = new ConcurrentDictionary<string, Delegate>();
+        EventQueue = new ConcurrentQueue<string>();
     }
 }

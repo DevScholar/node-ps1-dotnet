@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
@@ -25,6 +26,19 @@ public static class Reflection
                 { "frameworkMoniker", frameworkMoniker },
                 { "runtimeVersion", environmentVersion },
                 { "frameworkDescription", frameworkDescription }
+            };
+        }
+
+        if (action == "Poll")
+        {
+            var events = new List<string>();
+            string evt;
+            while (BridgeState.EventQueue.TryDequeue(out evt))
+                events.Add(evt);
+            return new Dictionary<string, object>
+            {
+                { "type", "poll" },
+                { "events", events }
             };
         }
 
@@ -303,6 +317,66 @@ public static class Reflection
             var isStatic = target is Type;
             var targetType = isStatic ? (Type)target : target.GetType();
 
+            // Auto-detect Application.Run() — treat as InvokeDetached so Node.js is not blocked.
+            // Works for WinForms (System.Windows.Forms.Application) and WPF (System.Windows.Application).
+            if (name == "Run" && targetType.Name.IndexOf("Application", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                MethodInfo runMethod = null;
+                var bindFlagsRun = BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.FlattenHierarchy;
+                foreach (var m in targetType.GetMethods(bindFlagsRun))
+                {
+                    if (m.Name != "Run") continue;
+                    if (m.GetParameters().Length != realArgs.Length) continue;
+                    runMethod = m;
+                    break;
+                }
+                if (runMethod != null)
+                {
+                    // Install WinForms WindowsFormsSynchronizationContext before Application.Run starts
+                    foreach (var loadedAsm in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        if (loadedAsm.GetName().Name != "System.Windows.Forms") continue;
+                        var wfCtxType = loadedAsm.GetType("System.Windows.Forms.WindowsFormsSynchronizationContext");
+                        if (wfCtxType == null) break;
+                        var wfSc = Activator.CreateInstance(wfCtxType) as SynchronizationContext;
+                        if (wfSc != null)
+                        {
+                            SynchronizationContext.SetSynchronizationContext(wfSc);
+                            PsHost.MainSyncContext = wfSc;
+                        }
+                        break;
+                    }
+                    // Install WPF DispatcherSynchronizationContext
+                    foreach (var loadedAsm in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        if (loadedAsm.GetName().Name != "WindowsBase") continue;
+                        var dispType = loadedAsm.GetType("System.Windows.Threading.Dispatcher");
+                        var syncCtxType = loadedAsm.GetType("System.Windows.Threading.DispatcherSynchronizationContext");
+                        if (dispType == null || syncCtxType == null) break;
+                        var dispProp = dispType.GetProperty("CurrentDispatcher");
+                        if (dispProp == null) break;
+                        var dispatcher = dispProp.GetValue(null, null);
+                        if (dispatcher == null) break;
+                        var wpfSc = Activator.CreateInstance(syncCtxType, new object[] { dispatcher }) as SynchronizationContext;
+                        if (wpfSc != null) PsHost.MainSyncContext = wpfSc;
+                        break;
+                    }
+
+                    // Pre-send ok so Node.js is unblocked before we block in Application.Run
+                    var preResp = SimpleJson.Serialize(new Dictionary<string, object>
+                    {
+                        { "type", "primitive" }, { "value", true }
+                    });
+                    lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(preResp); }
+
+                    // Block here — SynchronizationContext.Post routes incoming commands to this message loop
+                    var convertedRunArgs = ConvertArgsForMethod(runMethod, realArgs);
+                    runMethod.Invoke(isStatic ? null : target, convertedRunArgs);
+                    Environment.Exit(0);
+                    return new Dictionary<string, object> { { "__skipResponse", true } };
+                }
+            }
+
             // Detect ref/out methods early and dispatch to dedicated handler.
             // node-api-dotnet style: C# bool F(ref string a, out int b) => JS { result, a, b }
             {
@@ -377,7 +451,25 @@ public static class Reflection
                                 value = Convert.ChangeType(value, prop.PropertyType);
                             }
                         }
-                        prop.SetValue(target, value);
+
+                        // If we captured a UI thread SynchronizationContext, use it to marshal the property set
+                        if (PsHost.MainSyncContext != null)
+                        {
+                            PsHost.MainSyncContext.Send((_) => prop.SetValue(target, value), null);
+                        }
+                        else
+                        {
+                            // Fallback: for WinForms Control, use Invoke if available
+                            var targetAsControl = target as System.Windows.Forms.Control;
+                            if (targetAsControl != null && targetAsControl.InvokeRequired)
+                            {
+                                targetAsControl.Invoke(new System.Action(() => prop.SetValue(target, value)));
+                            }
+                            else
+                            {
+                                prop.SetValue(target, value);
+                            }
+                        }
                         return new Dictionary<string, object> { { "type", "void" } };
                     }
                     catch (Exception ex)
@@ -611,6 +703,54 @@ public static class Reflection
         
         if (action == "AwaitTask")
         {
+            // Async mode (new): callbackId present — attaches ContinueWith, returns immediately.
+            if (cmd.ContainsKey("callbackId"))
+            {
+                var targetId2 = cmd["targetId"].ToString();
+                var cbId = cmd["callbackId"].ToString();
+                var task2 = BridgeState.ObjectStore[targetId2] as Task;
+                if (task2 == null)
+                    throw new Exception("AwaitTask: target is not a Task");
+
+                var capturedWriter = BridgeState.Writer;
+                task2.ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                    {
+                        var errMsg = t.Exception != null
+                            ? (t.Exception.InnerException != null
+                                ? t.Exception.InnerException.Message
+                                : t.Exception.Message)
+                            : "Task faulted";
+                        var errJson = SimpleJson.Serialize(new Dictionary<string, object>
+                        {
+                            { "type", "event" }, { "callbackId", cbId }, { "error", errMsg }
+                        });
+                        BridgeState.EventQueue.Enqueue(errJson);
+                        return;
+                    }
+                    object resultVal;
+                    var resultProp = t.GetType().GetProperty("Result");
+                    if (resultProp != null)
+                    {
+                        try { resultVal = Protocol.ConvertToProtocol(resultProp.GetValue(t, null)); }
+                        catch { resultVal = new Dictionary<string, object> { { "type", "void" } }; }
+                    }
+                    else
+                    {
+                        resultVal = new Dictionary<string, object> { { "type", "void" } };
+                    }
+                    var protoArgs = new List<object> { resultVal };
+                    var msgJson = SimpleJson.Serialize(new Dictionary<string, object>
+                    {
+                        { "type", "event" }, { "callbackId", cbId }, { "args", protoArgs }
+                    });
+                    BridgeState.EventQueue.Enqueue(msgJson);
+                });
+                return new Dictionary<string, object> { { "type", "void" } };
+            }
+
+            // Sync mode (legacy): no callbackId — blocks on task.Wait() and returns result.
             var taskId = cmd["taskId"].ToString();
             var task = (Task)BridgeState.ObjectStore[taskId];
             try
@@ -782,9 +922,145 @@ public static class Reflection
             return new Dictionary<string, object> { { "type", "void" } };
         }
         
+        if (action == "AddType")
+        {
+            var sourceCode = cmd["source"].ToString();
+            var refsRaw = cmd.ContainsKey("references") ? cmd["references"] : null;
+            var refList = new List<string>();
+            if (refsRaw is List<object>)
+                foreach (var r in (List<object>)refsRaw) refList.Add(r.ToString());
+
+            var providerType = Type.GetType("Microsoft.CSharp.CSharpCodeProvider, System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089");
+            if (providerType == null)
+                providerType = Type.GetType("Microsoft.CSharp.CSharpCodeProvider");
+            if (providerType == null)
+                throw new Exception("AddType: CSharpCodeProvider not found");
+
+            var provider = Activator.CreateInstance(providerType);
+            var paramsType = providerType.Assembly.GetType("System.CodeDom.Compiler.CompilerParameters");
+            var compileParams = Activator.CreateInstance(paramsType);
+            paramsType.GetProperty("GenerateInMemory").SetValue(compileParams, true, null);
+            paramsType.GetProperty("GenerateExecutable").SetValue(compileParams, false, null);
+
+            var defaultRefs = new string[] {
+                "System.dll", "System.Core.dll", "System.Drawing.dll",
+                "System.Windows.Forms.dll", "mscorlib.dll"
+            };
+            var referencedAssemblies = (System.Collections.Specialized.StringCollection)
+                paramsType.GetProperty("ReferencedAssemblies").GetValue(compileParams, null);
+            foreach (var r in defaultRefs) referencedAssemblies.Add(r);
+            foreach (var r in refList) referencedAssemblies.Add(r);
+
+            // Add all currently-loaded assemblies by full path (covers WPF, WebView2, etc.)
+            // Also try to load WPF assemblies from WPF install dir if not yet loaded.
+            var wpfNames = new string[] { "WindowsBase", "PresentationCore", "PresentationFramework" };
+            foreach (var wpfName in wpfNames)
+            {
+                bool found = false;
+                foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (a.GetName().Name == wpfName && !string.IsNullOrEmpty(a.Location))
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    try
+                    {
+                        System.Reflection.Assembly.Load(wpfName + ", Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35");
+                    }
+                    catch { }
+                }
+            }
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    var loc = asm.Location;
+                    if (!string.IsNullOrEmpty(loc)) referencedAssemblies.Add(loc);
+                }
+                catch { }
+            }
+
+            var compileMethod = providerType.GetMethod("CompileAssemblyFromSource",
+                new Type[] { paramsType, typeof(string[]) });
+            var result = compileMethod.Invoke(provider,
+                new object[] { compileParams, new string[] { sourceCode } });
+
+            var errorsObj = result.GetType().GetProperty("Errors").GetValue(result, null);
+            var count = (int)errorsObj.GetType().GetProperty("Count").GetValue(errorsObj, null);
+            var indexer = errorsObj.GetType().GetMethod("get_Item");
+            var sb = new System.Text.StringBuilder();
+            for (var ei = 0; ei < count; ei++)
+            {
+                var err = indexer.Invoke(errorsObj, new object[] { ei });
+                var isWarning = (bool)err.GetType().GetProperty("IsWarning").GetValue(err, null);
+                if (!isWarning)
+                    sb.AppendLine(err.GetType().GetProperty("ErrorText").GetValue(err, null).ToString());
+            }
+            if (sb.Length > 0)
+                throw new Exception("AddType compile errors:\n" + sb.ToString());
+
+            var compiledAsm = (Assembly)result.GetType().GetProperty("CompiledAssembly").GetValue(result, null);
+            var asmId = Guid.NewGuid().ToString();
+            BridgeState.ObjectStore[asmId] = compiledAsm;
+            return new Dictionary<string, object>
+            {
+                { "type", "ref" }, { "id", asmId }, { "typeName", "Assembly" }
+            };
+        }
+
+        if (action == "InvokeDetached")
+        {
+            var targetId = cmd["targetId"].ToString();
+            var methodName = cmd["methodName"].ToString();
+            var target = BridgeState.ObjectStore[targetId];
+            var rawArgs = Protocol.ResolveArgs(cmd.ContainsKey("args") ? cmd["args"] : null);
+
+            MethodInfo detachedMethod = null;
+            foreach (var m in target.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (m.Name != methodName) continue;
+                if (m.GetParameters().Length != rawArgs.Length) continue;
+                detachedMethod = m;
+                break;
+            }
+            if (detachedMethod == null)
+                throw new Exception("InvokeDetached: method not found: " + methodName);
+
+            // Capture WPF DispatcherSynchronizationContext before blocking
+            foreach (var loadedAsm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (loadedAsm.GetName().Name != "WindowsBase") continue;
+                var dispType = loadedAsm.GetType("System.Windows.Threading.Dispatcher");
+                var syncCtxType = loadedAsm.GetType("System.Windows.Threading.DispatcherSynchronizationContext");
+                if (dispType == null || syncCtxType == null) break;
+                var dispProp = dispType.GetProperty("CurrentDispatcher");
+                if (dispProp == null) break;
+                var dispatcher = dispProp.GetValue(null, null);
+                if (dispatcher == null) break;
+                var sc = Activator.CreateInstance(syncCtxType, new object[] { dispatcher }) as SynchronizationContext;
+                if (sc != null) PsHost.MainSyncContext = sc;
+                break;
+            }
+
+            // Pre-send ok response BEFORE the blocking call
+            var preResponse = SimpleJson.Serialize(new Dictionary<string, object>
+            {
+                { "type", "primitive" }, { "value", true }
+            });
+            lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(preResponse); }
+
+            detachedMethod.Invoke(target, rawArgs);
+            Environment.Exit(0);
+            return new Dictionary<string, object> { { "__skipResponse", true } };
+        }
+
         return new Dictionary<string, object> { { "type", "void" } };
     }
-    
+
     private static object[] ConvertArgsForMethod(MethodInfo method, object[] args)
     {
         if (args == null || args.Length == 0) return args;
@@ -852,8 +1128,19 @@ public static class Reflection
                 }
                 catch { }
             }
+            else if (pType.IsArray && !argType.IsArray)
+            {
+                // params T[] — single value supplied for a params array parameter
+                var elemType = pType.GetElementType();
+                if (elemType != null && elemType.IsAssignableFrom(argType))
+                {
+                    var arr = Array.CreateInstance(elemType, 1);
+                    arr.SetValue(arg, 0);
+                    convertedArgs[i] = arr;
+                }
+            }
         }
-        
+
         return convertedArgs;
     }
     
@@ -1028,8 +1315,6 @@ public static class Reflection
 
     private static void SendEventToJs(string cbId, object[] args)
     {
-        var writer = BridgeState.Writer;
-        if (writer == null) return;
         var protoArgs = new List<Dictionary<string, object>>();
         foreach (var arg in args)
         {
@@ -1043,16 +1328,7 @@ public static class Reflection
             { "callbackId", cbId },
             { "args", protoArgs }
         };
-        var json = SimpleJson.Serialize(msg);
-        if (BridgeState.UseQueueMode)
-        {
-            BridgeState.EventQueue.Enqueue(json);
-        }
-        else
-        {
-            writer.WriteLine(json);
-            try { if (PsHost.ProcessNestedCommands != null) PsHost.ProcessNestedCommands(); } catch { }
-        }
+        BridgeState.EventQueue.Enqueue(SimpleJson.Serialize(msg));
     }
 
     private static string InferFrameworkMoniker()

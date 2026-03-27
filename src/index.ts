@@ -5,17 +5,50 @@ import { fileURLToPath } from 'node:url';
 import { getPowerShellPath } from './utils.js';
 import { IpcSync } from './ipc.js';
 import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.js';
-import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet, setPollingMode, releaseObject } from './proxy.js';
-export { releaseObject };
+import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet, releaseObject } from './proxy.js';
+export { releaseObject, callbackRegistry, createProxy, createProxyWithInlineProps };
 import { createNamespaceProxy, createExportNamespaceProxy } from './namespace.js';
 
 export const __filename = fileURLToPath(import.meta.url);
 export const __dirname = path.dirname(__filename);
 
+let stopPolling: (() => void) | null = null;
+
+function startPolling() {
+    if (stopPolling) return; // already running
+    let active = true;
+    const timer = setInterval(() => {
+        if (!active || !getInitialized()) { clearInterval(timer); stopPolling = null; return; }
+        const ipc = getIpc();
+        if (!ipc) return;
+        try {
+            const res = ipc.send({ action: 'Poll' } as any) as any;
+            if (res && res.type === 'poll' && Array.isArray(res.events)) {
+                for (const evtStr of res.events as string[]) {
+                    try {
+                        const evt = JSON.parse(evtStr);
+                        const cb = callbackRegistry.get(evt.callbackId);
+                        if (cb) {
+                            const wrappedArgs = (evt.args || []).map((arg: any) => {
+                                if (arg && arg.type === 'ref' && arg.props) return createProxyWithInlineProps(arg);
+                                return createProxy(arg);
+                            });
+                            try { cb(...wrappedArgs, evt.error || null); } catch {}
+                        }
+                    } catch {}
+                }
+            }
+        } catch {}
+    }, 8);
+    stopPolling = () => { active = false; clearInterval(timer); };
+}
+
 function cleanup() {
     if (!getInitialized()) return;
     setInitialized(false);
-    
+
+    if (stopPolling) { stopPolling(); stopPolling = null; }
+
     const ipc = getIpc();
     if (ipc) {
         try {
@@ -106,7 +139,7 @@ function doInitialize() {
                 }
                 return createProxy(arg);
             });
-            return cb(...wrappedArgs);
+            return cb(...wrappedArgs, res.error || null);
         }
         return null;
     });
@@ -114,6 +147,7 @@ function doInitialize() {
     ipc.connect();
     setIpc(ipc);
     setInitialized(true);
+    startPolling();
 }
 
 export const node_ps1_dotnet = {
@@ -165,6 +199,31 @@ export const node_ps1_dotnet = {
             throw new Error(res.message);
         }
         return res && res.value !== undefined ? res.value : null;
+    },
+
+    _addType(source: string, references?: string[]): any {
+        doInitialize();
+        const ipc = getIpc();
+        const cmd: any = { action: 'AddType', source };
+        if (references && references.length > 0) cmd.references = references;
+        const res = ipc!.send(cmd);
+        if (res && (res as any).type === 'error') {
+            throw new Error('AddType failed: ' + (res as any).message);
+        }
+        return createProxy(res);
+    },
+
+    _awaitTask(task: any): Promise<any> {
+        doInitialize();
+        return new Promise<any>((resolve, reject) => {
+            const cbId = 'awaittask_' + Math.random().toString(36).slice(2, 10);
+            callbackRegistry.set(cbId, (result: any, error?: string) => {
+                callbackRegistry.delete(cbId);
+                if (error) { reject(new Error(error)); return; }
+                resolve(result);
+            });
+            getIpc()!.send({ action: 'AwaitTask', targetId: task.__ref, callbackId: cbId });
+        });
     }
 };
 
@@ -188,6 +247,15 @@ const dotnetProxy = new Proxy(function() {} as any, {
         }
         if (prop === 'runtimeVersion') {
             return node_ps1_dotnet._getRuntimeInfo().runtimeVersion;
+        }
+        if (prop === 'addType') {
+            return (source: string, references?: string[]) => {
+                doInitialize();
+                return node_ps1_dotnet._addType(source, references);
+            };
+        }
+        if (prop === 'awaitTask') {
+            return (task: any) => node_ps1_dotnet._awaitTask(task);
         }
         if (prop === 'addListener') return (event: string, fn: Function) => {
             if (event === 'resolving') {
@@ -224,44 +292,13 @@ const dotnetProxy = new Proxy(function() {} as any, {
         }
         // Polling-mode helpers used by node-with-window on Windows
         if (prop === 'startApplication') {
-            return (app: any, window: any, webView?: any) => {
+            return (app: any, window: any) => {
                 doInitialize();
-                const cmd: any = { action: 'StartApplication', appId: app.__ref, windowId: window.__ref };
-                if (webView) cmd.webViewId = webView.__ref;
-                getIpc()!.send(cmd);
-                // After startApplication, the WPF dispatcher owns the UI thread.
-                // Task.Wait() on the UI thread would deadlock; switch to fire-and-forget mode.
-                setPollingMode(true);
+                getIpc()!.send({ action: 'InvokeDetached', targetId: app.__ref, methodName: 'Run', args: [{ __ref: window.__ref }] });
             };
         }
         if (prop === 'pollEvent') {
-            return () => {
-                const ipc = getIpc();
-                if (!ipc) return false;
-                let processed = false;
-                while (true) {
-                    const res = ipc.send({ action: 'Poll' });
-                    if (!res || (res as any).type !== 'ipc') break;
-                    const message = (res as any).message;
-                    if (!message) break;
-                    let eventMsg: any;
-                    try { eventMsg = JSON.parse(message); } catch { break; }
-                    if (eventMsg && eventMsg.type === 'event' && eventMsg.callbackId) {
-                        const cb = callbackRegistry.get(eventMsg.callbackId);
-                        if (cb) {
-                            const wrappedArgs = (eventMsg.args || []).map((arg: any) => {
-                                if (arg && arg.type === 'ref' && arg.props) {
-                                    return createProxyWithInlineProps(arg);
-                                }
-                                return createProxy(arg);
-                            });
-                            try { cb(...wrappedArgs); } catch (e) { console.error('Event callback error:', e); }
-                            processed = true;
-                        }
-                    }
-                }
-                return processed;
-            };
+            return () => false;
         }
         return node_ps1_dotnet._load(prop);
     },
