@@ -15,10 +15,10 @@ export const __dirname = path.dirname(__filename);
 let stopPolling: (() => void) | null = null;
 
 function startPolling() {
-    if (stopPolling) return; // already running
+    if (stopPolling) return;
     let active = true;
     const timer = setInterval(() => {
-        if (!active || !getInitialized()) { clearInterval(timer); stopPolling = null; return; }
+        if (!active) { clearInterval(timer); stopPolling = null; return; }
         const ipc = getIpc();
         if (!ipc) return;
         try {
@@ -35,11 +35,14 @@ function startPolling() {
                             });
                             try { cb(...wrappedArgs, evt.error || null); } catch {}
                         }
-                    } catch {}
+                    } catch (e) {
+                        console.error('[Poll] JSON parse error:', (e as any).message);
+                    }
                 }
             }
         } catch {}
     }, 8);
+    timer.ref();
     stopPolling = () => { active = false; clearInterval(timer); };
 }
 

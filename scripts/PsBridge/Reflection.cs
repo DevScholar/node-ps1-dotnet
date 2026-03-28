@@ -942,13 +942,8 @@ public static class Reflection
             paramsType.GetProperty("GenerateInMemory").SetValue(compileParams, true, null);
             paramsType.GetProperty("GenerateExecutable").SetValue(compileParams, false, null);
 
-            var defaultRefs = new string[] {
-                "System.dll", "System.Core.dll", "System.Drawing.dll",
-                "System.Windows.Forms.dll", "mscorlib.dll"
-            };
             var referencedAssemblies = (System.Collections.Specialized.StringCollection)
                 paramsType.GetProperty("ReferencedAssemblies").GetValue(compileParams, null);
-            foreach (var r in defaultRefs) referencedAssemblies.Add(r);
             foreach (var r in refList) referencedAssemblies.Add(r);
 
             // Add all currently-loaded assemblies by full path (covers WPF, WebView2, etc.)

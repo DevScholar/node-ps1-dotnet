@@ -127,8 +127,14 @@ public static class PsHost
                     {
                         ReplyQueue.Add(msg);
                     }
+                    else if (msg.ContainsKey("action") && msg["action"].ToString() == "Poll")
+                    {
+                        // Poll is pure I/O — handle on reader thread to avoid deadlock
+                        ExecuteCommand(msg);
+                    }
                     else
                     {
+                        // Other commands: queue for Dispatcher thread via MainSyncContext
                         CommandQueue.Add(msg);
                         if (MainSyncContext != null)
                         {

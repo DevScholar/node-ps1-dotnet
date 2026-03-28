@@ -24,13 +24,17 @@ const objectEventMap = new Map<string, Map<string, { callback: Function; eventNa
 
 // Cleans up all JS-side state for a released object id.
 // Called both from FinalizationRegistry and from releaseObject().
-function cleanupObjectById(id: string): void {
+function cleanupObjectById(id: string, isExplicitRelease: boolean = false): void {
     typeMetadataCache.delete(id);
     typeNameCache.delete(id);
     const events = objectEventMap.get(id);
     if (events) {
-        for (const cbId of events.keys()) callbackRegistry.delete(cbId);
-        objectEventMap.delete(id);
+        // Only delete event callbacks on explicit release, not on GC
+        // This prevents menu callbacks from being deleted prematurely
+        if (isExplicitRelease) {
+            for (const cbId of events.keys()) callbackRegistry.delete(cbId);
+            objectEventMap.delete(id);
+        }
     }
 }
 
@@ -40,12 +44,12 @@ function cleanupObjectById(id: string): void {
 export function releaseObject(proxy: any): void {
     const id: unknown = proxy?.__ref;
     if (typeof id !== 'string') return;
-    cleanupObjectById(id);
+    cleanupObjectById(id, true);
     try { getNodePs1Dotnet()._release(id); } catch {}
 }
 
 const gcRegistry = new FinalizationRegistry((id: string) => {
-    cleanupObjectById(id);
+    cleanupObjectById(id, false);
     try { getNodePs1Dotnet()._release(id); } catch {}
 });
 
@@ -216,7 +220,7 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
             if (prop.startsWith('add_')) {
                 const eventName = prop.substring(4);
                 return (callback: Function) => {
-                    const cbId = `cb_${Date.now()}_${Math.random()}`;
+                    const cbId = `cb_${Math.random().toString(36).slice(2)}_${Date.now()}`;
                     callbackRegistry.set(cbId, callback);
                     // Track so this callback is cleaned up when the object is released
                     if (!objectEventMap.has(id)) objectEventMap.set(id, new Map());

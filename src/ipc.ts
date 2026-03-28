@@ -64,8 +64,16 @@ export class IpcSync {
             // Read more data
             let n: number;
             try { n = fs.readSync(this.fd, chunk, 0, chunk.length, null); }
-            catch { return null; }
-            if (n === 0) return null;
+            catch (e) {
+                // EPIPE or other error — pipe is broken
+                console.error('[node-ps1-dotnet] readSync error:', (e as any).code, (e as any).message);
+                return null;
+            }
+            if (n === 0) {
+                // EOF — pipe closed by .NET side
+                console.error('[node-ps1-dotnet] readSync returned 0 (EOF) — PowerShell process may have exited');
+                return null;
+            }
             if (this.readBufLen + n > this.readBuf.length) {
                 const bigger = Buffer.allocUnsafe(Math.max(this.readBuf.length * 2, this.readBufLen + n));
                 this.readBuf.copy(bigger);
