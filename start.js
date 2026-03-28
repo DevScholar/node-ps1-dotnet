@@ -47,15 +47,16 @@ const runtimeFlags = {
 
 async function buildAndRun() {
     const tsFileDir = path.dirname(filePath);
-    
-    console.log('Building TypeScript in:', tsFileDir);
-    
-    const tscProc = spawn('npx', ['tsc', '-p', path.join(__dirname, 'tsconfig.json')], {
+    const projectRoot = path.dirname(tsFileDir.split('src')[0] + 'src');
+
+    console.log('Building TypeScript in:', projectRoot);
+
+    const tscProc = spawn('npx', ['tsc'], {
         stdio: 'inherit',
-        cwd: __dirname,
+        cwd: projectRoot,
         shell: true
     });
-    
+
     await new Promise((resolve, reject) => {
         tscProc.on('exit', (code) => {
             if (code !== 0) {
@@ -67,13 +68,12 @@ async function buildAndRun() {
         });
         tscProc.on('error', reject);
     });
-    
+
     console.log('Build complete. Running with', runtime, ':', tsFile);
-    
+
     const ext = path.extname(tsFile);
-    const baseName = path.basename(tsFile, ext);
-    const relativePath = path.relative(path.join(__dirname, 'src'), filePath);
-    const jsFile = path.join(__dirname, 'dist', relativePath.replace(/\.ts$/, '.js'));
+    const relativePath = path.relative(path.join(projectRoot, 'src'), filePath);
+    const jsFile = path.join(projectRoot, 'dist', relativePath.replace(/\.ts$/, '.js'));
     
     const runtimeArgs = runtimeFlags[runtime] || [];
     const runtimeCmd = runtime;

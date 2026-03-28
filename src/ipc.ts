@@ -44,6 +44,21 @@ export class IpcSync {
             if (!line) continue;
             let msg: any;
             try { msg = JSON.parse(line); } catch { continue; }
+
+            // If blocking marker, keep reading until actual result
+            if (msg.type === '__blocking__') {
+                while (true) {
+                    const resultLine = this.readLine();
+                    if (resultLine === null) {
+                        this.exited = true;
+                        return { type: 'exit', message: '' } as any;
+                    }
+                    if (!resultLine) continue;
+                    try { msg = JSON.parse(resultLine); } catch { continue; }
+                    if (msg.type !== '__blocking__') return msg as ProtocolResponse;
+                }
+            }
+
             return msg as ProtocolResponse;
         }
     }

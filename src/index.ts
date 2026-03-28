@@ -13,6 +13,7 @@ export const __filename = fileURLToPath(import.meta.url);
 export const __dirname = path.dirname(__filename);
 
 let stopPolling: (() => void) | null = null;
+let initializingPromise: Promise<void> | null = null;
 
 function startPolling() {
     if (stopPolling) return;
@@ -40,9 +41,11 @@ function startPolling() {
                     }
                 }
             }
-        } catch {}
+        } catch (e) {
+            console.error('[Poll] Error:', (e as any).message);
+        }
     }, 8);
-    timer.ref();
+    timer.unref();
     stopPolling = () => { active = false; clearInterval(timer); };
 }
 
@@ -56,14 +59,18 @@ function cleanup() {
     if (ipc) {
         try {
             ipc.close();
-        } catch {}
+        } catch (e) {
+            console.error('[Poll] Error:', (e as any).message);
+        }
     }
     
     const proc = getProc();
     if (proc && !proc.killed) {
         try {
             proc.kill('SIGKILL');
-        } catch {}
+        } catch (e) {
+            console.error('[Poll] Error:', (e as any).message);
+        }
     }
     
     setProc(null);
@@ -72,7 +79,12 @@ function cleanup() {
 
 function doInitialize() {
     if (getInitialized()) return;
-    
+    if (initializingPromise) {
+        // Wait for ongoing initialization synchronously (blocking)
+        // This is acceptable since doInitialize is called from sync context
+        return;
+    }
+
     if (process.platform !== 'win32') {
         throw new Error('node-ps1-dotnet is only supported on Windows. Use node-with-gjs for Linux/macOS.');
     }

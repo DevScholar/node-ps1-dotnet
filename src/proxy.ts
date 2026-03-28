@@ -1,4 +1,5 @@
 import { getIpc } from './state.js';
+import { randomUUID } from 'node:crypto';
 
 export let node_ps1_dotnetGetter: (() => any) | null = null;
 
@@ -173,7 +174,7 @@ function marshalArgs(args: any[]): any[] {
     return args.map((a: any) => {
         if (a && a.__ref) return { __ref: a.__ref };
         if (typeof a === 'function') {
-            const cbId = `cb_arg_${Date.now()}_${Math.random()}`;
+            const cbId = `cb_arg_${randomUUID()}`;
             callbackRegistry.set(cbId, a);
             return { type: 'callback', callbackId: cbId };
         }
@@ -188,6 +189,7 @@ function marshalArgs(args: any[]): any[] {
 // hasIndexer: true when the .NET type exposes a get_Item/set_Item indexer (e.g. IList, custom indexers).
 function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?: boolean): any {
     const ipc = getIpc();
+    if (!ipc) throw new Error('IPC not initialized');
 
     if (!typeMetadataCache.has(id)) {
         typeMetadataCache.set(id, new Map());
@@ -206,7 +208,7 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
             if (hasIndexer) {
                 const idx = Number(prop);
                 if (!isNaN(idx) && idx >= 0 && String(idx) === prop) {
-                    const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: 'get_Item', args: [idx] });
+                    const res = ipc.send({ action: 'Invoke', targetId: id, methodName: 'get_Item', args: [idx] });
                     return createProxy(res);
                 }
             }
@@ -220,12 +222,12 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
             if (prop.startsWith('add_')) {
                 const eventName = prop.substring(4);
                 return (callback: Function) => {
-                    const cbId = `cb_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+                    const cbId = `cb_${randomUUID()}`;
                     callbackRegistry.set(cbId, callback);
                     // Track so this callback is cleaned up when the object is released
                     if (!objectEventMap.has(id)) objectEventMap.set(id, new Map());
                     objectEventMap.get(id)!.set(cbId, { callback, eventName });
-                    ipc!.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
+                    ipc.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
                 };
             }
 
@@ -239,9 +241,12 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
                         if (entry.callback === callback && entry.eventName === eventName) {
                             callbackRegistry.delete(cbId);
                             events.delete(cbId);
+                            if (events.size === 0) objectEventMap.delete(id);
                             try {
-                                ipc!.send({ action: 'RemoveEvent', targetId: id, eventName, callbackId: cbId });
-                            } catch {}
+                                ipc.send({ action: 'RemoveEvent', targetId: id, eventName, callbackId: cbId });
+                            } catch (e) {
+                                console.error('[RemoveEvent] Error:', (e as any).message);
+                            }
                             return;
                         }
                     }
@@ -255,11 +260,11 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
             }
 
             if (memType === 'property') {
-                const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [] });
+                const res = ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: [] });
                 return createProxy(res);
             } else {
                 return (...args: any[]) => {
-                    const res = ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: marshalArgs(args) });
+                    const res = ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: marshalArgs(args) });
                     return createProxy(res);
                 };
             }
@@ -267,23 +272,25 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
 
         set: (_target: any, prop: string | symbol, value: any) => {
             if (typeof prop === 'symbol') return false;
+            if (!ipc) throw new Error('IPC not initialized');
             // Numeric index → .NET indexer set
             if (hasIndexer) {
                 const idx = Number(prop);
                 if (!isNaN(idx) && idx >= 0 && String(idx) === prop) {
                     const netVal = (value && value.__ref) ? { __ref: value.__ref } : marshalArgs([value])[0];
-                    ipc!.send({ action: 'Invoke', targetId: id, methodName: 'set_Item', args: [idx, netVal] });
+                    ipc.send({ action: 'Invoke', targetId: id, methodName: 'set_Item', args: [idx, netVal] });
                     return true;
                 }
             }
             const netArg = (value && value.__ref) ? { __ref: value.__ref } : value;
-            ipc!.send({ action: 'Invoke', targetId: id, methodName: prop, args: [netArg] });
+            ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: [netArg] });
             memberCache.set(prop, 'property');
             return true;
         },
 
         construct: (_target: any, args: any[]) => {
-            const res = ipc!.send({ action: 'New', typeId: id, args: marshalArgs(args) });
+            if (!ipc) throw new Error('IPC not initialized');
+            const res = ipc.send({ action: 'New', typeId: id, args: marshalArgs(args) });
             return createProxy(res);
         },
 
@@ -301,6 +308,7 @@ export function createProxyWithInlineProps(meta: any): any {
 
 export function createProxy(meta: any): any {
     const ipc = getIpc();
+    if (!ipc) throw new Error('IPC not initialized');
 
     if (meta.type === 'primitive' || meta.type === 'null') return meta.value;
 
@@ -335,20 +343,17 @@ export function createProxy(meta: any): any {
 
     if (meta.type === 'task') {
         const taskId = meta.id;
-        // In polling mode, awaiting via task.Wait() on the WPF UI thread deadlocks.
-        // Release the task reference and return null (fire-and-forget).
-        if (pollingMode) {
-            try { ipc!.send({ action: 'Release', targetId: taskId }); } catch {}
-            return null;
-        }
         return new Promise((resolve, reject) => {
             try {
-                const res = ipc!.send({ action: 'AwaitTask', taskId: taskId });
+                const res = ipc.send({ action: 'AwaitTask', taskId: taskId });
                 resolve(createProxy(res));
             } catch (e) {
+                console.error('[AwaitTask] Error:', (e as any).message);
                 reject(e);
             } finally {
-                try { ipc!.send({ action: 'Release', targetId: taskId }); } catch {}
+                try { ipc.send({ action: 'Release', targetId: taskId }); } catch (e) {
+                    console.error('[Release] Error:', (e as any).message);
+                }
             }
         });
     }

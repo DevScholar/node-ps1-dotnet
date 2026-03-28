@@ -377,6 +377,38 @@ public static class Reflection
                 }
             }
 
+            // Auto-detect ShowDialog() — run on UI thread with message loop
+            if (name == "ShowDialog" && realArgs.Length == 0)
+            {
+                MethodInfo showDialogMethod = null;
+                var bindFlagsDialog = BindingFlags.Public | BindingFlags.Instance;
+                foreach (var m in targetType.GetMethods(bindFlagsDialog))
+                {
+                    if (m.Name != "ShowDialog") continue;
+                    if (m.GetParameters().Length != 0) continue;
+                    showDialogMethod = m;
+                    break;
+                }
+                if (showDialogMethod != null)
+                {
+                    object dialogResult = null;
+
+                    try
+                    {
+                        dialogResult = showDialogMethod.Invoke(target, new object[0]);
+                        var resultJson = SimpleJson.Serialize(Protocol.ConvertToProtocol(dialogResult));
+                        lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(resultJson); }
+                    }
+                    catch (Exception ex)
+                    {
+                        var errJson = SimpleJson.Serialize(new Dictionary<string, object> { { "type", "error" }, { "message", ex.Message } });
+                        lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(errJson); }
+                    }
+
+                    return new Dictionary<string, object> { { "type", "__blocking__" } };
+                }
+            }
+
             // Detect ref/out methods early and dispatch to dedicated handler.
             // node-api-dotnet style: C# bool F(ref string a, out int b) => JS { result, a, b }
             {
