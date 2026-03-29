@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { getPowerShellPath } from './utils.js';
 import { IpcSync } from './ipc.js';
 import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.js';
-import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet, releaseObject } from './proxy.js';
+import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet, releaseObject, dispatchPollEvents } from './proxy.js';
 export { releaseObject, callbackRegistry, createProxy, createProxyWithInlineProps };
 import { createNamespaceProxy, createExportNamespaceProxy } from './namespace.js';
 
@@ -25,21 +25,7 @@ function startPolling() {
         try {
             const res = ipc.send({ action: 'Poll' } as any) as any;
             if (res && res.type === 'poll' && Array.isArray(res.events)) {
-                for (const evtStr of res.events as string[]) {
-                    try {
-                        const evt = JSON.parse(evtStr);
-                        const cb = callbackRegistry.get(evt.callbackId);
-                        if (cb) {
-                            const wrappedArgs = (evt.args || []).map((arg: any) => {
-                                if (arg && arg.type === 'ref' && arg.props) return createProxyWithInlineProps(arg);
-                                return createProxy(arg);
-                            });
-                            try { cb(...wrappedArgs, evt.error || null); } catch {}
-                        }
-                    } catch (e) {
-                        console.error('[Poll] JSON parse error:', (e as any).message);
-                    }
-                }
+                dispatchPollEvents(res.events);
             }
         } catch (e) {
             console.error('[Poll] Error:', (e as any).message);

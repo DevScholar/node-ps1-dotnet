@@ -59,6 +59,24 @@ const gcRegistry = new FinalizationRegistry((id: string) => {
 // task.Wait() on the WPF UI thread blocks the dispatcher that the task needs to complete.
 export let pollingMode = false;
 export function setPollingMode(val: boolean) { pollingMode = val; }
+
+// Dispatch a batch of serialised event strings (from a Poll response) synchronously.
+// Used both by the regular setInterval poller and by the ShowDialog spin-poll loop.
+export function dispatchPollEvents(events: string[]): void {
+    for (const evtStr of events) {
+        try {
+            const evt = JSON.parse(evtStr);
+            const cb = callbackRegistry.get(evt.callbackId);
+            if (cb) {
+                const wrappedArgs = (evt.args || []).map((arg: any) => {
+                    if (arg && arg.type === 'ref' && arg.props) return createProxyWithInlineProps(arg);
+                    return createProxy(arg);
+                });
+                try { cb(...wrappedArgs, evt.error || null); } catch {}
+            }
+        } catch {}
+    }
+}
 export const LARGE_ARRAY_THRESHOLD = 50;
 
 export function getObjectTypeName(id: string): string | null {
@@ -263,6 +281,48 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
                 const res = ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: [] });
                 return createProxy(res);
             } else {
+                // Special handling for ShowDialog: synchronous spin-poll loop that pumps
+                // events while the WPF nested dialog loop runs on the C# side.
+                // C# pre-sends {type:'showDialogPending',callbackId} then runs ShowDialog;
+                // Node.js keeps polling until the dialog-result event arrives, dispatching
+                // all other events (e.g. button clicks) along the way.
+                // This preserves the synchronous `const result = dialog.ShowDialog()` API.
+                if (prop === 'ShowDialog') {
+                    return (...args: any[]) => {
+                        const res = ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: marshalArgs(args) });
+                        if (res && (res as any).type === 'showDialogPending') {
+                            const cbId = (res as any).callbackId as string;
+                            let done = false;
+                            let result: any = undefined;
+                            let error: string | undefined;
+                            callbackRegistry.set(cbId, (r: any, e?: string) => {
+                                callbackRegistry.delete(cbId);
+                                error = e || undefined;
+                                result = r;
+                                done = true;
+                            });
+                            // Spin-poll: keep sending Poll until done is set by dialog result callback.
+                            // Atomics.wait provides a short sleep to avoid busy-waiting without
+                            // releasing the event loop (which would allow setInterval polls to race).
+                            const sa = new Int32Array(new SharedArrayBuffer(4));
+                            while (!done) {
+                                try {
+                                    const pollRes = ipc.send({ action: 'Poll' } as any) as any;
+                                    if (pollRes?.type === 'poll' && Array.isArray(pollRes.events)) {
+                                        dispatchPollEvents(pollRes.events);
+                                    }
+                                } catch {}
+                                if (!done) Atomics.wait(sa, 0, 0, 16);
+                            }
+                            if (error) throw new Error(error);
+                            return result;
+                        }
+                        // Fallback: sync result from old C# or non-WPF ShowDialog
+                        if (res && res.type === 'primitive') return res.value;
+                        if (res && res.type === 'null') return null;
+                        return res;
+                    };
+                }
                 return (...args: any[]) => {
                     const res = ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: marshalArgs(args) });
                     return createProxy(res);

@@ -377,7 +377,12 @@ public static class Reflection
                 }
             }
 
-            // Auto-detect ShowDialog() — run on UI thread with message loop
+            // Auto-detect ShowDialog() — async pending pattern so Node.js can poll events during dialog.
+            // 1. Ensure a WPF DispatcherSynchronizationContext exists for this thread so the reader
+            //    thread can post incoming commands (e.g. DialogResult=true) to the nested WPF loop.
+            // 2. Pre-send {type:'showDialogPending', callbackId} so Node.js resumes polling immediately.
+            // 3. Call ShowDialog (blocks here in WPF nested loop; commands dispatched via Post).
+            // 4. Enqueue result as an event so Node.js spin-poll picks it up synchronously.
             if (name == "ShowDialog" && realArgs.Length == 0)
             {
                 MethodInfo showDialogMethod = null;
@@ -391,21 +396,64 @@ public static class Reflection
                 }
                 if (showDialogMethod != null)
                 {
-                    object dialogResult = null;
+                    // Ensure a WPF DispatcherSynchronizationContext is set BEFORE pre-sending,
+                    // so commands arriving after the pre-send are routed to the nested WPF loop.
+                    // Dispatcher.CurrentDispatcher creates a dispatcher for this thread if needed.
+                    if (PsHost.MainSyncContext == null)
+                    {
+                        foreach (var loadedAsm in AppDomain.CurrentDomain.GetAssemblies())
+                        {
+                            if (loadedAsm.GetName().Name != "WindowsBase") continue;
+                            var dispType2 = loadedAsm.GetType("System.Windows.Threading.Dispatcher");
+                            var syncCtxType2 = loadedAsm.GetType("System.Windows.Threading.DispatcherSynchronizationContext");
+                            if (dispType2 == null || syncCtxType2 == null) break;
+                            var dispProp2 = dispType2.GetProperty("CurrentDispatcher");
+                            if (dispProp2 == null) break;
+                            var dispatcher2 = dispProp2.GetValue(null, null);
+                            if (dispatcher2 == null) break;
+                            var sc2 = Activator.CreateInstance(syncCtxType2, new object[] { dispatcher2 }) as SynchronizationContext;
+                            if (sc2 != null)
+                            {
+                                PsHost.MainSyncContext = sc2;
+                                SynchronizationContext.SetSynchronizationContext(sc2);
+                            }
+                            break;
+                        }
+                    }
 
+                    var dialogCallbackId = Guid.NewGuid().ToString();
+
+                    // Pre-send pending token — Node.js resumes its event loop for polling
+                    var pendingResp = SimpleJson.Serialize(new Dictionary<string, object>
+                    {
+                        { "type", "showDialogPending" }, { "callbackId", dialogCallbackId }
+                    });
+                    lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(pendingResp); }
+
+                    // ShowDialog runs a nested WPF dispatcher loop.
+                    // Incoming IPC commands (e.g. setting DialogResult from a click handler) are
+                    // dispatched via MainSyncContext.Post → DrainCommandQueue during that loop.
                     try
                     {
-                        dialogResult = showDialogMethod.Invoke(target, new object[0]);
-                        var resultJson = SimpleJson.Serialize(Protocol.ConvertToProtocol(dialogResult));
-                        lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(resultJson); }
+                        var dialogResult = showDialogMethod.Invoke(target, new object[0]);
+                        var protoArgs = new List<object> { Protocol.ConvertToProtocol(dialogResult) };
+                        var resultEvt = SimpleJson.Serialize(new Dictionary<string, object>
+                        {
+                            { "type", "event" }, { "callbackId", dialogCallbackId }, { "args", protoArgs }
+                        });
+                        BridgeState.EventQueue.Enqueue(resultEvt);
                     }
                     catch (Exception ex)
                     {
-                        var errJson = SimpleJson.Serialize(new Dictionary<string, object> { { "type", "error" }, { "message", ex.Message } });
-                        lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(errJson); }
+                        var innerMsg2 = ex.InnerException != null ? ex.InnerException.Message : ex.Message;
+                        var errEvt = SimpleJson.Serialize(new Dictionary<string, object>
+                        {
+                            { "type", "event" }, { "callbackId", dialogCallbackId }, { "error", innerMsg2 }
+                        });
+                        BridgeState.EventQueue.Enqueue(errEvt);
                     }
 
-                    return new Dictionary<string, object> { { "type", "__blocking__" } };
+                    return new Dictionary<string, object> { { "__skipResponse", true } };
                 }
             }
 
