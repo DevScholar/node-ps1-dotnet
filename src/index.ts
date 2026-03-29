@@ -28,7 +28,13 @@ function startPolling() {
                 dispatchPollEvents(res.events);
             }
         } catch (e) {
-            console.error('[Poll] Error:', (e as any).message);
+            const msg = (e as any).message || '';
+            if (msg.includes('EPIPE') || msg.includes('EOF')) {
+                // Pipe broke — PowerShell exited. Stop polling now; proc.on('exit') will call process.exit().
+                if (active) { active = false; clearInterval(timer); stopPolling = null; }
+            } else {
+                console.error('[Poll] Error:', msg);
+            }
         }
     }, 8);
     timer.unref();
@@ -157,6 +163,11 @@ export const node_ps1_dotnet = {
         const ipc = getIpc();
         const res = ipc!.send({ action: 'GetType', typeName });
         return createProxy(res);
+    },
+
+    _onAppStart() {
+        const proc = getProc();
+        if (proc) proc.ref();
     },
 
     _release(id: string) {

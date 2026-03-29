@@ -362,10 +362,10 @@ public static class Reflection
                         break;
                     }
 
-                    // Pre-send ok so Node.js is unblocked before we block in Application.Run
+                    // Pre-send appStart so Node.js can ref its proc and stay alive during Application.Run
                     var preResp = SimpleJson.Serialize(new Dictionary<string, object>
                     {
-                        { "type", "primitive" }, { "value", true }
+                        { "type", "appStart" }
                     });
                     lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(preResp); }
 

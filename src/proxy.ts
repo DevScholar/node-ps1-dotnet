@@ -325,6 +325,10 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
                 }
                 return (...args: any[]) => {
                     const res = ipc.send({ action: 'Invoke', targetId: id, methodName: prop, args: marshalArgs(args) });
+                    if (res && (res as any).type === 'appStart') {
+                        try { getNodePs1Dotnet()._onAppStart(); } catch {}
+                        return true;
+                    }
                     return createProxy(res);
                 };
             }
