@@ -59,6 +59,18 @@ export class IpcSync {
                 }
             }
 
+            // Sync callback: C# is blocked waiting for our reply before it can continue.
+            // Call the JS handler synchronously, send the return value back, then keep
+            // reading for the original response to the command we sent.
+            if (msg.type === 'syncEvent') {
+                let result: any = null;
+                try { result = this.onEvent(msg); } catch {}
+                try {
+                    fs.writeSync(this.fd, JSON.stringify({ type: 'reply', result: result ?? null }) + '\n');
+                } catch {}
+                continue;
+            }
+
             return msg as ProtocolResponse;
         }
     }

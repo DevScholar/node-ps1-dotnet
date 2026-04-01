@@ -172,6 +172,56 @@ public static class Reflection
             return new Dictionary<string, object> { { "type", "void" } };
         }
 
+        if (action == "AddSyncEvent")
+        {
+            var target = BridgeState.ObjectStore[cmd["targetId"].ToString()];
+            var eventName = cmd["eventName"].ToString();
+            var cbId = cmd["callbackId"].ToString();
+
+            var eventInfo = target.GetType().GetEvent(eventName);
+            if (eventInfo != null)
+            {
+                var delegateType = eventInfo.EventHandlerType;
+                var invokeMethod = delegateType.GetMethod("Invoke");
+                var parameters = invokeMethod.GetParameters();
+
+                var paramExprs = new System.Linq.Expressions.ParameterExpression[parameters.Length];
+                for (var pi = 0; pi < parameters.Length; pi++)
+                    paramExprs[pi] = System.Linq.Expressions.Expression.Parameter(parameters[pi].ParameterType, "p" + pi);
+
+                var boxedExprs = new System.Linq.Expressions.Expression[parameters.Length];
+                for (var pi = 0; pi < parameters.Length; pi++)
+                    boxedExprs[pi] = System.Linq.Expressions.Expression.Convert(paramExprs[pi], typeof(object));
+
+                var argsArrayExpr = System.Linq.Expressions.Expression.NewArrayInit(typeof(object), boxedExprs);
+                var fireMethod = typeof(Reflection).GetMethod("FireSyncEventAndWait", BindingFlags.NonPublic | BindingFlags.Static);
+                var cbIdExpr = System.Linq.Expressions.Expression.Constant(cbId, typeof(string));
+                var callExpr = System.Linq.Expressions.Expression.Call(fireMethod, cbIdExpr, argsArrayExpr);
+
+                // The delegate return type may be void or bool (e.g. close-request).
+                // If void: discard the object return value from FireSyncEventAndWait.
+                // If non-void: convert the object result to the required type.
+                System.Linq.Expressions.Expression body;
+                if (invokeMethod.ReturnType == typeof(void))
+                {
+                    body = System.Linq.Expressions.Expression.Block(callExpr, System.Linq.Expressions.Expression.Empty());
+                }
+                else
+                {
+                    body = System.Linq.Expressions.Expression.Convert(callExpr, invokeMethod.ReturnType);
+                }
+
+                var lambdaExpr = System.Linq.Expressions.Expression.Lambda(delegateType, body, paramExprs);
+                Delegate handler = lambdaExpr.Compile();
+
+                eventInfo.AddEventHandler(target, handler);
+                var storeKey = cmd["targetId"].ToString() + ":" + eventName + ":" + cbId;
+                BridgeState.EventHandlerStore[storeKey] = handler;
+            }
+
+            return new Dictionary<string, object> { { "type", "void" } };
+        }
+
         if (action == "AddEvent")
         {
             var target = BridgeState.ObjectStore[cmd["targetId"].ToString()];
@@ -965,28 +1015,22 @@ public static class Reflection
 
             AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
             {
-                var writer = BridgeState.Writer;
-                if (writer == null) return null;
-
                 var protoArgs = new List<Dictionary<string, object>>();
                 protoArgs.Add(new Dictionary<string, object> { { "type", "primitive" }, { "value", args.Name } });
 
                 var msg = new Dictionary<string, object>
                 {
-                    { "type", "event" },
+                    { "type", "syncEvent" },
                     { "callbackId", cbId },
                     { "args", protoArgs }
                 };
-                var json = SimpleJson.Serialize(msg);
-                writer.WriteLine(json);
+                lock (BridgeState.Writer)
+                {
+                    BridgeState.Writer.WriteLine(SimpleJson.Serialize(msg));
+                }
 
                 object result = null;
-                try
-                {
-                    if (PsHost.ProcessNestedCommands != null)
-                        result = PsHost.ProcessNestedCommands();
-                }
-                catch { }
+                try { result = PsHost.RunProcessNestedCommands(); } catch { }
 
                 if (result is string)
                 {
@@ -1386,6 +1430,31 @@ public static class Reflection
             { "result", resultProto },
             { "outs", outs }
         };
+    }
+
+    // Fire a sync event to Node.js and block until the JS handler returns a value.
+    // C# is suspended in RunProcessNestedCommands(), processing any proxy calls the
+    // JS handler makes, until Node.js sends back {type:'reply', result:...}.
+    private static object FireSyncEventAndWait(string cbId, object[] args)
+    {
+        var protoArgs = new List<Dictionary<string, object>>();
+        foreach (var arg in args)
+        {
+            protoArgs.Add(arg == null
+                ? new Dictionary<string, object> { { "type", "null" } }
+                : Protocol.ConvertToProtocol(arg));
+        }
+        var msg = new Dictionary<string, object>
+        {
+            { "type", "syncEvent" },
+            { "callbackId", cbId },
+            { "args", protoArgs }
+        };
+        lock (BridgeState.Writer)
+        {
+            BridgeState.Writer.WriteLine(SimpleJson.Serialize(msg));
+        }
+        return PsHost.RunProcessNestedCommands();
     }
 
     private static void SendEventToJs(string cbId, object[] args)

@@ -249,9 +249,24 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
                 };
             }
 
+            // addSync_EventName: like add_EventName but C# blocks until the JS handler
+            // returns, and the return value is forwarded back to the .NET event handler.
+            // Use this for events where the handler must influence .NET behavior synchronously,
+            // e.g. obj.addSync_Closing((s, e) => { e.Cancel = true; })
+            if (prop.startsWith('addSync_')) {
+                const eventName = prop.substring(8);
+                return (callback: Function) => {
+                    const cbId = `cbsync_${randomUUID()}`;
+                    callbackRegistry.set(cbId, callback);
+                    if (!objectEventMap.has(id)) objectEventMap.set(id, new Map());
+                    objectEventMap.get(id)!.set(cbId, { callback, eventName });
+                    ipc.send({ action: 'AddSyncEvent', targetId: id, eventName, callbackId: cbId });
+                };
+            }
+
             // remove_EventName(callback) — mirrors .NET event -= pattern
-            if (prop.startsWith('remove_')) {
-                const eventName = prop.substring(7);
+            if (prop.startsWith('remove_') || prop.startsWith('removeSync_')) {
+                const eventName = prop.startsWith('removeSync_') ? prop.substring(11) : prop.substring(7);
                 return (callback: Function) => {
                     const events = objectEventMap.get(id);
                     if (!events) return;
