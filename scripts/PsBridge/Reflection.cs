@@ -783,6 +783,16 @@ public static class Reflection
                             result = methods[0].Invoke(isStatic ? null : target, realArgs);
                         }
                     }
+                    else if (methods.Length > 1 && realArgs.Length == 0)
+                    {
+                        // Multiple overloads, no args: prefer the parameterless overload.
+                        MethodInfo parameterless = null;
+                        foreach (var m in methods)
+                        {
+                            if (m.GetParameters().Length == 0) { parameterless = m; break; }
+                        }
+                        result = (parameterless ?? methods[0]).Invoke(isStatic ? null : target, realArgs);
+                    }
                     else if (methods.Length > 0)
                     {
                         result = methods[0].Invoke(isStatic ? null : target, realArgs);
