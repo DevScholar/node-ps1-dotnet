@@ -62,19 +62,29 @@ export function setPollingMode(val: boolean) { pollingMode = val; }
 
 // Dispatch a batch of serialised event strings (from a Poll response) synchronously.
 // Used both by the regular setInterval poller and by the ShowDialog spin-poll loop.
+//
+// Coalescing: if the same callbackId appears multiple times in one batch, only the
+// last occurrence is dispatched. This matches OS-level WM_MOUSEMOVE coalescing —
+// for high-frequency positional events (drag, scroll) only the latest value matters,
+// and processing stale intermediate values would accumulate errors.
 export function dispatchPollEvents(events: string[]): void {
+    // Parse all events, keeping only the last entry per callbackId.
+    const coalesced = new Map<string, any>();
     for (const evtStr of events) {
         try {
             const evt = JSON.parse(evtStr);
-            const cb = callbackRegistry.get(evt.callbackId);
-            if (cb) {
-                const wrappedArgs = (evt.args || []).map((arg: any) => {
-                    if (arg && arg.type === 'ref' && arg.props) return createProxyWithInlineProps(arg);
-                    return createProxy(arg);
-                });
-                try { cb(...wrappedArgs, evt.error || null); } catch {}
-            }
+            coalesced.set(evt.callbackId, evt);
         } catch {}
+    }
+    for (const evt of coalesced.values()) {
+        const cb = callbackRegistry.get(evt.callbackId);
+        if (cb) {
+            const wrappedArgs = (evt.args || []).map((arg: any) => {
+                if (arg && arg.type === 'ref' && arg.props) return createProxyWithInlineProps(arg);
+                return createProxy(arg);
+            });
+            try { cb(...wrappedArgs, evt.error || null); } catch {}
+        }
     }
 }
 export const LARGE_ARRAY_THRESHOLD = 50;
