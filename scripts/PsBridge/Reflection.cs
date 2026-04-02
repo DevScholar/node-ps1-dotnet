@@ -320,6 +320,44 @@ public static class Reflection
                             {
                                 convertedArgs[i] = Enum.ToObject(pType, arg);
                             }
+                            else if (arg is object[] && pType.IsGenericType)
+                            {
+                                // Convert object[] → List<T> or IList<T>
+                                var genDef = pType.GetGenericTypeDefinition();
+                                if (genDef == typeof(List<>) || genDef == typeof(IList<>)
+                                    || genDef == typeof(ICollection<>) || genDef == typeof(IEnumerable<>))
+                                {
+                                    var elemType = pType.GetGenericArguments()[0];
+                                    var listType = typeof(List<>).MakeGenericType(elemType);
+                                    var list = Activator.CreateInstance(listType);
+                                    var addMethod = listType.GetMethod("Add");
+                                    var arrItems = (object[])arg;
+                                    var allOk = true;
+                                    foreach (var item in arrItems)
+                                    {
+                                        if (item != null && !elemType.IsAssignableFrom(item.GetType()))
+                                        {
+                                            allOk = false;
+                                            break;
+                                        }
+                                        addMethod.Invoke(list, new object[] { item });
+                                    }
+                                    if (allOk)
+                                    {
+                                        convertedArgs[i] = list;
+                                    }
+                                    else
+                                    {
+                                        match = false;
+                                        break;
+                                    }
+                                }
+                                else
+                                {
+                                    match = false;
+                                    break;
+                                }
+                            }
                             else
                             {
                                 match = false;

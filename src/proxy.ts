@@ -208,6 +208,7 @@ function marshalArgs(args: any[]): any[] {
         }
         // Date → ISO string so C# ConvertArgsForMethod can parse to DateTime/DateTimeOffset
         if (a instanceof Date) return a.toISOString();
+        if (Array.isArray(a)) return marshalArgs(a);
         return a;
     });
 }
@@ -399,6 +400,8 @@ export function createProxy(meta: any): any {
     const ipc = getIpc();
     if (!ipc) throw new Error('IPC not initialized');
 
+    if (meta.type === 'error') throw new Error(meta.message || 'Unknown .NET error');
+
     if (meta.type === 'primitive' || meta.type === 'null') return meta.value;
 
     // DateTime/DateTimeOffset → JS Date  (node-api-dotnet: DateTime => Date)
@@ -431,20 +434,11 @@ export function createProxy(meta: any): any {
     }
 
     if (meta.type === 'task') {
-        const taskId = meta.id;
-        return new Promise((resolve, reject) => {
-            try {
-                const res = ipc.send({ action: 'AwaitTask', taskId: taskId });
-                resolve(createProxy(res));
-            } catch (e) {
-                console.error('[AwaitTask] Error:', (e as any).message);
-                reject(e);
-            } finally {
-                try { ipc.send({ action: 'Release', targetId: taskId }); } catch (e) {
-                    console.error('[Release] Error:', (e as any).message);
-                }
-            }
-        });
+        // Return a proxy ref to the Task — do NOT auto-await here.
+        // Sync task.Wait() on the UI thread causes deadlocks for Tasks that need
+        // the dispatcher (e.g. WebView2 CreateAsync).  Let dotnet.awaitTask() handle
+        // awaiting via the async ContinueWith path instead.
+        return makeRefProxy(meta.id);
     }
 
     if (meta.type === 'namespace') {

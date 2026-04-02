@@ -246,6 +246,11 @@ public static class Protocol
                     
                     realArgs.Add(callback);
                 }
+                else if (arg is object[] || arg is List<object>)
+                {
+                    // Nested array: resolve __ref objects inside it
+                    realArgs.Add(ResolveNestedArray(arg));
+                }
                 else
                 {
                     realArgs.Add(arg);
@@ -253,6 +258,35 @@ public static class Protocol
             }
         }
         return realArgs.ToArray();
+    }
+
+    private static object[] ResolveNestedArray(object arrayObj)
+    {
+        IEnumerable<object> items = null;
+        if (arrayObj is object[])
+            items = (object[])arrayObj;
+        else if (arrayObj is List<object>)
+            items = (List<object>)arrayObj;
+        if (items == null) return new object[0];
+
+        var result = new List<object>();
+        foreach (var item in items)
+        {
+            var dict = item as Dictionary<string, object>;
+            if (dict != null && dict.ContainsKey("__ref"))
+            {
+                result.Add(BridgeState.ObjectStore[dict["__ref"].ToString()]);
+            }
+            else if (item is object[] || item is List<object>)
+            {
+                result.Add(ResolveNestedArray(item));
+            }
+            else
+            {
+                result.Add(item);
+            }
+        }
+        return result.ToArray();
     }
 
     public static void RemoveBridgeObject(string id)
