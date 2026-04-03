@@ -83,7 +83,9 @@ export function dispatchPollEvents(events: string[]): void {
                 if (arg && arg.type === 'ref' && arg.props) return createProxyWithInlineProps(arg);
                 return createProxy(arg);
             });
-            try { cb(...wrappedArgs, evt.error || null); } catch {}
+            try { 
+                cb(...wrappedArgs, evt.error || null);
+            } catch {}
         }
     }
 }
@@ -216,7 +218,8 @@ function marshalArgs(args: any[]): any[] {
 // Core proxy factory for a .NET object reference.
 // inlineProps: pre-fetched property values attached to event args, avoids extra round-trips.
 // hasIndexer: true when the .NET type exposes a get_Item/set_Item indexer (e.g. IList, custom indexers).
-function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?: boolean): any {
+// isTask: true when the object is a Task, enabling await support via then() method.
+function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?: boolean, isTask?: boolean): any {
     const ipc = getIpc();
     if (!ipc) throw new Error('IPC not initialized');
 
@@ -231,6 +234,63 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
         get: (_target: any, prop: string | symbol) => {
             if (prop === '__ref') return id;
             if (prop === '__inlineProps') return inlineProps;
+            
+            // Task await support: make the proxy thenable
+            // Uses asynchronous polling to allow Promise resolution to work correctly
+            if (isTask && prop === 'then') {
+                return (onFulfilled: any, onRejected: any) => {
+                    return new Promise((resolve, reject) => {
+                        const cbId = 'awaittask_' + randomUUID();
+                        
+                        callbackRegistry.set(cbId, (result: any, error?: string) => {
+                            callbackRegistry.delete(cbId);
+                            if (error) {
+                                if (onRejected) {
+                                    try { onRejected(new Error(error)); } catch {}
+                                }
+                                reject(new Error(error));
+                            } else {
+                                // CRITICAL: Call onFulfilled first to notify the JS engine
+                                // This is what allows await to continue
+                                if (onFulfilled) {
+                                    try { onFulfilled(result); } catch {}
+                                }
+                                resolve(result);
+                            }
+                        });
+                        
+                        ipc.send({ action: 'AwaitTask', targetId: id, callbackId: cbId });
+                        
+                        // Async polling - allows Promise resolution to work correctly
+                        const sa = new Int32Array(new SharedArrayBuffer(4));
+                        const poll = () => {
+                            if (!callbackRegistry.has(cbId)) return;
+                            
+                            try {
+                                const pollRes = ipc.send({ action: 'Poll' } as any) as any;
+                                if (pollRes?.type === 'poll' && Array.isArray(pollRes.events)) {
+                                    dispatchPollEvents(pollRes.events);
+                                }
+                            } catch {}
+                            
+                            if (callbackRegistry.has(cbId)) {
+                                Atomics.wait(sa, 0, 0, 16);
+                                setImmediate(poll);
+                            }
+                        };
+                        
+                        setImmediate(poll);
+                    });
+                };
+            }
+            
+            // CRITICAL: Non-Task proxies must NOT have a 'then' property.
+            // If they do, Promise.resolve will treat them as thenables and call then(),
+            // which causes infinite loops or wrong behavior.
+            if (!isTask && prop === 'then') {
+                return undefined;
+            }
+            
             if (typeof prop === 'symbol') return undefined;
 
             // Numeric index → .NET indexer (obj[0], obj[1], ...)
@@ -245,7 +305,14 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
             // Fast path: use pre-fetched inline props (typically on event args).
             if (inlineProps && Object.prototype.hasOwnProperty.call(inlineProps, prop)) {
                 memberCache.set(prop, 'property');
-                return inlineProps[prop];
+                const val = inlineProps[prop];
+                // If the stored value is a protocol-format object, wrap it as a proxy.
+                // e.g. Request: {type:'ref', id:'...', props:{Uri:'...', Method:'...'}}
+                if (val !== null && val !== undefined && typeof val === 'object' && typeof val.type === 'string') {
+                    if (val.type === 'ref' && val.props) return createProxyWithInlineProps(val);
+                    return createProxy(val);
+                }
+                return val;
             }
 
             if (prop.startsWith('add_')) {
@@ -438,7 +505,8 @@ export function createProxy(meta: any): any {
         // Sync task.Wait() on the UI thread causes deadlocks for Tasks that need
         // the dispatcher (e.g. WebView2 CreateAsync).  Let dotnet.awaitTask() handle
         // awaiting via the async ContinueWith path instead.
-        return makeRefProxy(meta.id);
+        // The proxy is thenable, so `await task` works naturally.
+        return makeRefProxy(meta.id, undefined, undefined, true);
     }
 
     if (meta.type === 'namespace') {

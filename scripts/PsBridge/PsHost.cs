@@ -18,7 +18,7 @@ public static class PsHost
     public static object RunProcessNestedCommands()
     {
         var queues = new BlockingCollection<Dictionary<string, object>>[] { ReplyQueue, CommandQueue };
-        
+
         while (BridgeState.PipeServer != null && BridgeState.PipeServer.IsConnected)
         {
             Dictionary<string, object> item;
@@ -98,10 +98,10 @@ public static class PsHost
 
     public static void StartServer()
     {
-        // Key change: Changed PipeOptions.None to PipeOptions.Asynchronous
-        // This allows Windows to perform concurrent overlapped I/O on the handle, so reader thread suspension will never block main thread writes!
+        // Use async pipe with explicit 64KB buffers. Default buffer size (0) means unbuffered,
+        // causing writes to block until the client reads — which deadlocks sync events.
         BridgeState.PipeServer = new NamedPipeServerStream(
-            BridgeState.PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+            BridgeState.PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 65536, 65536);
         
         BridgeState.PipeServer.WaitForConnection();
         var utf8Encoding = new System.Text.UTF8Encoding(false);
@@ -148,6 +148,9 @@ public static class PsHost
             {
                 CommandQueue.CompleteAdding();
                 ReplyQueue.CompleteAdding();
+                // After Application.Run() blocks the main thread, the foreach loop
+                // can't reach Environment.Exit(0). Force exit when pipe disconnects.
+                Environment.Exit(0);
             }
         });
         readerThread.IsBackground = true;

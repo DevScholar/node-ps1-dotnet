@@ -358,6 +358,48 @@ public static class Reflection
                                     break;
                                 }
                             }
+                            else if (arg is object[] && pType.IsArray)
+                            {
+                                // Convert object[] → typed array (byte[], int[], string[], etc.)
+                                var elemType = pType.GetElementType();
+                                var arrItems = (object[])arg;
+                                var typedArr = Array.CreateInstance(elemType, arrItems.Length);
+                                var allOk = true;
+                                for (var j = 0; j < arrItems.Length; j++)
+                                {
+                                    try
+                                    {
+                                        var item = arrItems[j];
+                                        if (item == null)
+                                        {
+                                            typedArr.SetValue(null, j);
+                                        }
+                                        else if (elemType.IsAssignableFrom(item.GetType()))
+                                        {
+                                            typedArr.SetValue(item, j);
+                                        }
+                                        else if (item is IConvertible)
+                                        {
+                                            typedArr.SetValue(Convert.ChangeType(item, elemType), j);
+                                        }
+                                        else
+                                        {
+                                            allOk = false;
+                                            break;
+                                        }
+                                    }
+                                    catch { allOk = false; break; }
+                                }
+                                if (allOk)
+                                {
+                                    convertedArgs[i] = typedArr;
+                                }
+                                else
+                                {
+                                    match = false;
+                                    break;
+                                }
+                            }
                             else
                             {
                                 match = false;
@@ -888,42 +930,66 @@ public static class Reflection
                 var cbId = cmd["callbackId"].ToString();
                 var task2 = BridgeState.ObjectStore[targetId2] as Task;
                 if (task2 == null)
+                {
                     throw new Exception("AwaitTask: target is not a Task");
+                }
 
-                var capturedWriter = BridgeState.Writer;
                 task2.ContinueWith(t =>
                 {
-                    if (t.IsFaulted)
+                    Action completionAction = () =>
                     {
-                        var errMsg = t.Exception != null
-                            ? (t.Exception.InnerException != null
-                                ? t.Exception.InnerException.Message
-                                : t.Exception.Message)
-                            : "Task faulted";
-                        var errJson = SimpleJson.Serialize(new Dictionary<string, object>
+                        if (t.IsFaulted)
                         {
-                            { "type", "event" }, { "callbackId", cbId }, { "error", errMsg }
+                            var errMsg = t.Exception != null
+                                ? (t.Exception.InnerException != null
+                                    ? t.Exception.InnerException.Message
+                                    : t.Exception.Message)
+                                : "Task faulted";
+                            var errJson = SimpleJson.Serialize(new Dictionary<string, object>
+                            {
+                                { "type", "event" }, { "callbackId", cbId }, { "error", errMsg }
+                            });
+                            BridgeState.EventQueue.Enqueue(errJson);
+                            return;
+                        }
+                        object resultVal;
+                        var taskType = t.GetType();
+                        // Only get Result for generic Task<T>, not for non-generic Task
+                        // Non-generic Task may have a Result property in some .NET versions (VoidTaskResult)
+                        // but we should treat it as void
+                        if (taskType.IsGenericType && taskType.GetGenericTypeDefinition() == typeof(Task<>))
+                        {
+                            var resultProp = taskType.GetProperty("Result");
+                            if (resultProp != null)
+                            {
+                                try { resultVal = Protocol.ConvertToProtocol(resultProp.GetValue(t, null)); }
+                                catch { resultVal = new Dictionary<string, object> { { "type", "void" } }; }
+                            }
+                            else
+                            {
+                                resultVal = new Dictionary<string, object> { { "type", "void" } };
+                            }
+                        }
+                        else
+                        {
+                            resultVal = new Dictionary<string, object> { { "type", "void" } };
+                        }
+                        var protoArgs = new List<object> { resultVal };
+                        var msgJson = SimpleJson.Serialize(new Dictionary<string, object>
+                        {
+                            { "type", "event" }, { "callbackId", cbId }, { "args", protoArgs }
                         });
-                        BridgeState.EventQueue.Enqueue(errJson);
-                        return;
-                    }
-                    object resultVal;
-                    var resultProp = t.GetType().GetProperty("Result");
-                    if (resultProp != null)
+                        BridgeState.EventQueue.Enqueue(msgJson);
+                    };
+                    
+                    if (PsHost.MainSyncContext != null)
                     {
-                        try { resultVal = Protocol.ConvertToProtocol(resultProp.GetValue(t, null)); }
-                        catch { resultVal = new Dictionary<string, object> { { "type", "void" } }; }
+                        PsHost.MainSyncContext.Post(_ => completionAction(), null);
                     }
                     else
                     {
-                        resultVal = new Dictionary<string, object> { { "type", "void" } };
+                        completionAction();
                     }
-                    var protoArgs = new List<object> { resultVal };
-                    var msgJson = SimpleJson.Serialize(new Dictionary<string, object>
-                    {
-                        { "type", "event" }, { "callbackId", cbId }, { "args", protoArgs }
-                    });
-                    BridgeState.EventQueue.Enqueue(msgJson);
                 });
                 return new Dictionary<string, object> { { "type", "void" } };
             }
@@ -1306,6 +1372,34 @@ public static class Reflection
                     convertedArgs[i] = arr;
                 }
             }
+            else if (pType.IsArray && argType.IsArray && !pType.IsAssignableFrom(argType))
+            {
+                // Convert mismatched arrays (e.g. object[] → byte[])
+                var elemType = pType.GetElementType();
+                var srcArr = (Array)arg;
+                var typedArr = Array.CreateInstance(elemType, srcArr.Length);
+                var allOk = true;
+                for (var j = 0; j < srcArr.Length; j++)
+                {
+                    try
+                    {
+                        var item = srcArr.GetValue(j);
+                        if (item == null)
+                            typedArr.SetValue(null, j);
+                        else if (elemType.IsAssignableFrom(item.GetType()))
+                            typedArr.SetValue(item, j);
+                        else if (item is IConvertible)
+                            typedArr.SetValue(Convert.ChangeType(item, elemType), j);
+                        else
+                        {
+                            allOk = false;
+                            break;
+                        }
+                    }
+                    catch { allOk = false; break; }
+                }
+                if (allOk) convertedArgs[i] = typedArr;
+            }
         }
 
         return convertedArgs;
@@ -1363,6 +1457,11 @@ public static class Reflection
                     }
                     else if (args[i] is IConvertible && pType != typeof(string))
                     {
+                        continue;
+                    }
+                    else if (pType.IsArray && argType.IsArray)
+                    {
+                        // object[] can be converted to typed array (byte[], int[], etc.)
                         continue;
                     }
                     else
@@ -1488,9 +1587,69 @@ public static class Reflection
         var protoArgs = new List<Dictionary<string, object>>();
         foreach (var arg in args)
         {
-            protoArgs.Add(arg == null
-                ? new Dictionary<string, object> { { "type", "null" } }
-                : Protocol.ConvertToProtocol(arg));
+            if (arg == null)
+            {
+                protoArgs.Add(new Dictionary<string, object> { { "type", "null" } });
+            }
+            else
+            {
+                // Check if this is CoreWebView2WebResourceRequestedEventArgs
+                // If so, extract Request property as inline props to avoid IPC calls in sync handler
+                var argType = arg.GetType();
+                if (argType.Name == "CoreWebView2WebResourceRequestedEventArgs")
+                {
+                    var refId = Guid.NewGuid().ToString();
+                    BridgeState.ObjectStore[refId] = arg;
+                    
+                    // Extract Request property as inline props
+                    var requestProp = argType.GetProperty("Request");
+                    var requestObj = requestProp != null ? requestProp.GetValue(arg, null) : null;
+                    
+                    var inlineProps = new Dictionary<string, object>();
+                    if (requestObj != null)
+                    {
+                        var requestType = requestObj.GetType();
+                        var requestRefId = Guid.NewGuid().ToString();
+                        BridgeState.ObjectStore[requestRefId] = requestObj;
+                        
+                        // Extract Uri and Method from Request
+                        var uriProp = requestType.GetProperty("Uri");
+                        var methodProp = requestType.GetProperty("Method");
+                        
+                        var requestInlineProps = new Dictionary<string, object>();
+                        if (uriProp != null)
+                        {
+                            var uriVal = uriProp.GetValue(requestObj, null);
+                            requestInlineProps["Uri"] = uriVal != null ? uriVal.ToString() : null;
+                        }
+                        if (methodProp != null)
+                        {
+                            var methodVal = methodProp.GetValue(requestObj, null);
+                            requestInlineProps["Method"] = methodVal != null ? methodVal.ToString() : null;
+                        }
+                        
+                        inlineProps["Request"] = new Dictionary<string, object>
+                        {
+                            { "type", "ref" },
+                            { "id", requestRefId },
+                            { "netType", requestType.FullName },
+                            { "props", requestInlineProps }
+                        };
+                    }
+                    
+                    protoArgs.Add(new Dictionary<string, object>
+                    {
+                        { "type", "ref" },
+                        { "id", refId },
+                        { "netType", argType.FullName },
+                        { "props", inlineProps }
+                    });
+                }
+                else
+                {
+                    protoArgs.Add(Protocol.ConvertToProtocol(arg));
+                }
+            }
         }
         var msg = new Dictionary<string, object>
         {
@@ -1502,7 +1661,53 @@ public static class Reflection
         {
             BridgeState.Writer.WriteLine(SimpleJson.Serialize(msg));
         }
-        return PsHost.RunProcessNestedCommands();
+        var result = PsHost.RunProcessNestedCommands();
+
+        // If JS returned response data for WebResourceRequested, create the response in C#.
+        // This avoids nested IPC calls which deadlock due to pipe FlushFileBuffers blocking.
+        foreach (var arg in args)
+        {
+            if (arg == null) continue;
+            if (arg.GetType().Name != "CoreWebView2WebResourceRequestedEventArgs") continue;
+            var resultDict = result as Dictionary<string, object>;
+            if (resultDict == null || !resultDict.ContainsKey("html")) break;
+
+            var htmlStr = resultDict["html"].ToString();
+            var statusCode = resultDict.ContainsKey("statusCode") ? Convert.ToInt32(resultDict["statusCode"]) : 200;
+            var reasonPhrase = resultDict.ContainsKey("reasonPhrase") ? resultDict["reasonPhrase"].ToString() : "OK";
+            var headers = resultDict.ContainsKey("headers") ? resultDict["headers"].ToString() : "Content-Type: text/html; charset=utf-8";
+
+            try
+            {
+                var htmlBytes = System.Text.Encoding.UTF8.GetBytes(htmlStr);
+                var memStream = new System.IO.MemoryStream(htmlBytes);
+
+                // Get environment from sender (args[0] is the CoreWebView2)
+                var sender = args[0];
+                var envProp = sender.GetType().GetProperty("Environment");
+                if (envProp != null)
+                {
+                    var env = envProp.GetValue(sender, null);
+                    var createRespMethod = env.GetType().GetMethod("CreateWebResourceResponse");
+                    if (createRespMethod != null)
+                    {
+                        var response = createRespMethod.Invoke(env, new object[] { (System.IO.Stream)memStream, statusCode, reasonPhrase, headers });
+                        var responseProp = arg.GetType().GetProperty("Response");
+                        if (responseProp != null)
+                        {
+                            responseProp.SetValue(arg, response, null);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("[FireSyncEventAndWait] Error setting response: " + ex.Message);
+            }
+            break;
+        }
+
+        return result;
     }
 
     private static void SendEventToJs(string cbId, object[] args)

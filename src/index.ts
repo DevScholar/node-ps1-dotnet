@@ -228,13 +228,26 @@ export const node_ps1_dotnet = {
     _awaitTask(task: any): Promise<any> {
         doInitialize();
         return new Promise<any>((resolve, reject) => {
+            const ipc = getIpc();
             const cbId = 'awaittask_' + Math.random().toString(36).slice(2, 10);
             callbackRegistry.set(cbId, (result: any, error?: string) => {
                 callbackRegistry.delete(cbId);
                 if (error) { reject(new Error(error)); return; }
                 resolve(result);
             });
-            getIpc()!.send({ action: 'AwaitTask', targetId: task.__ref, callbackId: cbId });
+            ipc!.send({ action: 'AwaitTask', targetId: task.__ref, callbackId: cbId });
+            
+            // Spin-poll until callback is triggered (same pattern as Task.then)
+            const sa = new Int32Array(new SharedArrayBuffer(4));
+            while (callbackRegistry.has(cbId)) {
+                try {
+                    const pollRes = ipc!.send({ action: 'Poll' } as any) as any;
+                    if (pollRes?.type === 'poll' && Array.isArray(pollRes.events)) {
+                        dispatchPollEvents(pollRes.events);
+                    }
+                } catch {}
+                if (callbackRegistry.has(cbId)) Atomics.wait(sa, 0, 0, 16);
+            }
         });
     }
 };

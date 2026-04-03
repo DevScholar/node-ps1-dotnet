@@ -7,6 +7,11 @@ export class IpcSync {
     private readBuf = Buffer.allocUnsafe(64 * 1024);
     private readBufLen = 0;
     private pipeName: string;
+    // Track sync event nesting depth so we can buffer out-of-band poll responses.
+    // When a syncEvent is processed, nested IPC send() calls share the same pipe —
+    // a pending poll response would be read as a nested command response otherwise.
+    private syncEventDepth = 0;
+    private pollBuffer: any[] = [];
 
     constructor(pipeName: string, private onEvent: (msg: ProtocolResponse) => any) {
         this.pipeName = pipeName;
@@ -31,11 +36,18 @@ export class IpcSync {
     send(cmd: CommandRequest): ProtocolResponse {
         if (this.exited) return { type: 'exit', message: '' } as any;
         fs.writeSync(this.fd, JSON.stringify(cmd) + '\n');
-        return this.readResponse();
+        const response = this.readResponse();
+        return response;
     }
 
     private readResponse(): ProtocolResponse {
         while (true) {
+            // After sync event handling completes, return buffered poll responses
+            // to the outer readResponse() that originally sent the Poll command.
+            if (this.pollBuffer.length > 0 && this.syncEventDepth === 0) {
+                return this.pollBuffer.shift() as ProtocolResponse;
+            }
+
             const line = this.readLine();
             if (line === null) {
                 this.exited = true;
@@ -63,11 +75,22 @@ export class IpcSync {
             // Call the JS handler synchronously, send the return value back, then keep
             // reading for the original response to the command we sent.
             if (msg.type === 'syncEvent') {
+                this.syncEventDepth++;
                 let result: any = null;
                 try { result = this.onEvent(msg); } catch {}
+                this.syncEventDepth--;
                 try {
                     fs.writeSync(this.fd, JSON.stringify({ type: 'reply', result: result ?? null }) + '\n');
                 } catch {}
+                continue;
+            }
+
+            // During sync event handling, nested IPC calls share this pipe.
+            // A pending poll response (from the outer send({action:'Poll'})) would
+            // be misread as the nested command's response. Buffer it so the outer
+            // readResponse() returns it after the sync event completes.
+            if (msg.type === 'poll' && this.syncEventDepth > 0) {
+                this.pollBuffer.push(msg);
                 continue;
             }
 
