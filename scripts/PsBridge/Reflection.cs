@@ -642,6 +642,36 @@ public static class Reflection
                                 var intValue = value is long ? (int)(long)value : (int)value;
                                 value = Enum.ToObject(prop.PropertyType, intValue);
                             }
+                            else if (value is object[] && prop.PropertyType.IsGenericType)
+                            {
+                                // Convert object[] → List<T> for generic collection properties
+                                // (mirrors the same logic in ConvertArgsForMethod)
+                                var genDef = prop.PropertyType.GetGenericTypeDefinition();
+                                if (genDef == typeof(List<>) || genDef == typeof(IList<>)
+                                    || genDef == typeof(ICollection<>) || genDef == typeof(IEnumerable<>))
+                                {
+                                    var elemType = prop.PropertyType.GetGenericArguments()[0];
+                                    var listType = typeof(List<>).MakeGenericType(elemType);
+                                    var list = Activator.CreateInstance(listType);
+                                    var addMethod = listType.GetMethod("Add");
+                                    foreach (var item in (object[])value)
+                                    {
+                                        if (item != null && !elemType.IsAssignableFrom(item.GetType()))
+                                        {
+                                            if (item is IConvertible)
+                                                addMethod.Invoke(list, new object[] { Convert.ChangeType(item, elemType) });
+                                            else
+                                                throw new InvalidCastException(
+                                                    string.Format("Cannot convert {0} to {1}", item.GetType().Name, elemType.Name));
+                                        }
+                                        else
+                                        {
+                                            addMethod.Invoke(list, new object[] { item });
+                                        }
+                                    }
+                                    value = list;
+                                }
+                            }
                             else if (prop.PropertyType.IsValueType && !prop.PropertyType.IsPrimitive)
                             {
                                 // Handle structs like FontWeight - try to create from integer
@@ -1291,6 +1321,13 @@ public static class Reflection
             return new Dictionary<string, object> { { "__skipResponse", true } };
         }
 
+        if (action == "SetConversionBehavior")
+        {
+            var mode = cmd.ContainsKey("mode") ? cmd["mode"].ToString() : "node-api-dotnet";
+            Protocol.PythonNetMode = (mode == "pythonnet");
+            return new Dictionary<string, object> { { "type", "void" } };
+        }
+
         return new Dictionary<string, object> { { "type", "void" } };
     }
 
@@ -1672,14 +1709,17 @@ public static class Reflection
             var resultDict = result as Dictionary<string, object>;
             if (resultDict == null || !resultDict.ContainsKey("html")) break;
 
-            var htmlStr = resultDict["html"].ToString();
+            var htmlStr = resultDict["html"] != null ? resultDict["html"].ToString() : "";
             var statusCode = resultDict.ContainsKey("statusCode") ? Convert.ToInt32(resultDict["statusCode"]) : 200;
             var reasonPhrase = resultDict.ContainsKey("reasonPhrase") ? resultDict["reasonPhrase"].ToString() : "OK";
             var headers = resultDict.ContainsKey("headers") ? resultDict["headers"].ToString() : "Content-Type: text/html; charset=utf-8";
+            var isBase64 = resultDict.ContainsKey("base64") && resultDict["base64"] is bool && (bool)resultDict["base64"];
 
             try
             {
-                var htmlBytes = System.Text.Encoding.UTF8.GetBytes(htmlStr);
+                var htmlBytes = isBase64
+                    ? Convert.FromBase64String(htmlStr)
+                    : System.Text.Encoding.UTF8.GetBytes(htmlStr);
                 var memStream = new System.IO.MemoryStream(htmlBytes);
 
                 // Get environment from sender (args[0] is the CoreWebView2)

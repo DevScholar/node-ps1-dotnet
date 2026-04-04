@@ -219,7 +219,7 @@ function marshalArgs(args: any[]): any[] {
 // inlineProps: pre-fetched property values attached to event args, avoids extra round-trips.
 // hasIndexer: true when the .NET type exposes a get_Item/set_Item indexer (e.g. IList, custom indexers).
 // isTask: true when the object is a Task, enabling await support via then() method.
-function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?: boolean, isTask?: boolean): any {
+function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?: boolean, isTask?: boolean, collectionKind?: 'list'): any {
     const ipc = getIpc();
     if (!ipc) throw new Error('IPC not initialized');
 
@@ -227,6 +227,22 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
         typeMetadataCache.set(id, new Map());
     }
     const memberCache = typeMetadataCache.get(id)!;
+
+    // ── List collection helpers (pythonnet mode) ───────────────────────────────
+    // Only created when collectionKind === 'list'. The generator lazily fetches
+    // each item via indexed IPC; _listToArr() materialises the full JS array.
+    // These are defined once per proxy instance (not per property access).
+    const _listIter: (() => Generator<any, void, unknown>) | null =
+        collectionKind === 'list'
+            ? function* () {
+                const cr = ipc!.send({ action: 'Invoke', targetId: id, methodName: 'Count', args: [] }) as any;
+                const n = (cr.value as number) | 0;
+                for (let i = 0; i < n; i++) {
+                    yield createProxy(ipc!.send({ action: 'Invoke', targetId: id, methodName: 'get_Item', args: [i] }));
+                }
+              }
+            : null;
+    const _listToArr: (() => any[]) | null = _listIter ? () => [..._listIter!()] : null;
 
     class Stub {}
 
@@ -291,7 +307,36 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
                 return undefined;
             }
             
-            if (typeof prop === 'symbol') return undefined;
+            if (typeof prop === 'symbol') {
+                if (_listIter && prop === Symbol.iterator) return _listIter;
+                if (_listIter && prop === Symbol.toStringTag) return 'DotNetList';
+                return undefined;
+            }
+
+            // ── List collection JS interface (pythonnet mode) ──────────────────
+            // Lowercase names never clash with .NET PascalCase member names.
+            if (_listIter !== null) {
+                if (prop === 'length')     return (ipc!.send({ action: 'Invoke', targetId: id, methodName: 'Count', args: [] }) as any).value;
+                if (prop === 'map')        return (fn: any) => _listToArr!().map(fn);
+                if (prop === 'filter')     return (fn: any) => _listToArr!().filter(fn);
+                if (prop === 'forEach')    return (fn: any) => _listToArr!().forEach(fn);
+                if (prop === 'find')       return (fn: any) => _listToArr!().find(fn);
+                if (prop === 'findIndex')  return (fn: any) => _listToArr!().findIndex(fn);
+                if (prop === 'some')       return (fn: any) => _listToArr!().some(fn);
+                if (prop === 'every')      return (fn: any) => _listToArr!().every(fn);
+                if (prop === 'reduce')     return (...a: any[]) => (_listToArr!() as any).reduce(...a);
+                if (prop === 'includes')   return (item: any) => _listToArr!().includes(item);
+                if (prop === 'indexOf')    return (item: any) => _listToArr!().indexOf(item);
+                if (prop === 'at')         return (i: number) => { const a = _listToArr!(); return i < 0 ? a[a.length + i] : a[i]; };
+                if (prop === 'join')       return (...a: any[]) => (_listToArr!() as any).join(...a);
+                if (prop === 'slice')      return (...a: any[]) => _listToArr!().slice(...a);
+                if (prop === 'entries')    return () => _listToArr!().entries();
+                if (prop === 'keys')       return () => _listToArr!().keys();
+                if (prop === 'values')     return () => _listToArr!().values();
+                if (prop === 'flat')       return (...a: any[]) => (_listToArr!() as any).flat(...a);
+                if (prop === 'flatMap')    return (fn: any) => _listToArr!().flatMap(fn);
+                if (prop === 'toString')   return () => '[DotNetList]';
+            }
 
             // Numeric index → .NET indexer (obj[0], obj[1], ...)
             if (hasIndexer) {
@@ -522,5 +567,6 @@ export function createProxy(meta: any): any {
 
     if (meta.type !== 'ref') return null;
 
-    return makeRefProxy(meta.id, undefined, meta.hasIndexer === true);
+    const ck: 'list' | undefined = (meta as any).collectionKind === 'list' ? 'list' : undefined;
+    return makeRefProxy(meta.id, undefined, meta.hasIndexer === true, false, ck);
 }

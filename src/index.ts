@@ -14,6 +14,7 @@ export const __dirname = path.dirname(__filename);
 
 let stopPolling: (() => void) | null = null;
 let initializingPromise: Promise<void> | null = null;
+let _typeConversionBehavior: 'node-api-dotnet' | 'pythonnet' = 'node-api-dotnet';
 
 function startPolling() {
     if (stopPolling) return;
@@ -258,6 +259,7 @@ const dotnetProxy = new Proxy(function() {} as any, {
     get: (target: any, prop: string) => {
         if (prop === 'default') return dotnetProxy;
         if (prop === 'then') return undefined;
+        if (prop === 'typeConversionBehavior') return _typeConversionBehavior;
         if (prop === 'load') return (nameOrPath: string) => {
             if (nameOrPath.includes('/') || nameOrPath.includes('\\') ||
                 nameOrPath.endsWith('.dll') || nameOrPath.endsWith('.exe')) {
@@ -329,7 +331,16 @@ const dotnetProxy = new Proxy(function() {} as any, {
     },
     apply: (target: any, argArray: any[], newTarget: any) => {
         return createNamespaceProxy(argArray[0], node_ps1_dotnet);
-    }
+    },
+    set: (_target: any, prop: string, value: any) => {
+        if (prop === 'typeConversionBehavior') {
+            _typeConversionBehavior = value;
+            doInitialize();
+            getIpc()!.send({ action: 'SetConversionBehavior', mode: value } as any);
+            return true;
+        }
+        return false;
+    },
 });
 
 export default dotnetProxy;

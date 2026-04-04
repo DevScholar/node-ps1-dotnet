@@ -145,7 +145,93 @@ dotnet.pollEvent();                     // Poll one pending UI event
 
 ## Migration Notes
 
-When migrating from `node-ps1-dotnet` to `node-api-dotnet`, note the following:
+---
+
+## Type Conversion Modes
+
+`node-ps1-dotnet` supports two collection marshalling strategies, selectable at runtime via `dotnet.typeConversionBehavior`:
+
+```typescript
+dotnet.typeConversionBehavior = 'node-api-dotnet'; // default
+dotnet.typeConversionBehavior = 'pythonnet';
+```
+
+The setting takes effect immediately for all subsequent IPC calls; it does not need to be set before `dotnet.load()`.
+
+### `'node-api-dotnet'` (default)
+
+Mirrors Microsoft's official `node-api-dotnet` type mappings:
+
+| .NET type | JS value | Mutable from JS? |
+|-----------|----------|-----------------|
+| `IList<T>` / `List<T>` | `T[]` (copy) | No — mutations are lost |
+| `IDictionary<K,V>` | `Map<K,V>` (copy) | No — mutations are lost |
+
+This is the default because it gives the most natural JS experience for read-only data.
+
+### `'pythonnet'` mode
+
+Inspired by [pythonnet](https://pythonnet.github.io/pythonnet/python.html)'s rule that reference types stay as references:
+
+| .NET type | JS value | Mutable from JS? |
+|-----------|----------|-----------------|
+| `IList<T>` / `List<T>` | ref proxy + JS array interface | **Yes** — `Add`, `Remove`, `Clear` apply to the original .NET object |
+| `IDictionary<K,V>` | `Map<K,V>` (copy, unchanged) | No (not yet implemented) |
+
+#### List proxy: JS array interface
+
+When a `IList<T>` is returned as a ref proxy it also exposes the full JS array reading API, so existing code that reads the collection does not need to change:
+
+```typescript
+dotnet.typeConversionBehavior = 'pythonnet';
+
+const origins = nwwReg.AllowedOrigins; // ref proxy, not a copy
+
+// ── Write operations: applied to the real .NET IList<string> ──
+origins.Add('*');           // ✅
+origins.Remove('old');      // ✅
+origins.Clear();            // ✅
+
+// ── Read operations: JS array interface (lowercase names) ──
+origins.length;                      // ✅  → Count
+for (const o of origins) { ... }     // ✅  → Symbol.iterator
+origins.map(o => o.toUpperCase());   // ✅  → materialises array, then maps
+origins.filter(o => o !== '*');      // ✅
+origins.forEach(o => console.log(o));// ✅
+origins.includes('*');               // ✅
+origins.indexOf('*');                // ✅
+[...origins];                        // ✅  → spread via Symbol.iterator
+origins.at(-1);                      // ✅  → last element
+
+// ── .NET PascalCase methods still work as normal ──
+origins.Contains('*');    // ✅
+origins.Count;            // ✅
+origins.IndexOf('*');     // ✅
+```
+
+> **Why no name clash?**  .NET standard members use `PascalCase` (`Add`, `Count`, `Contains`, …) while the added JS interface uses `camelCase` (`map`, `filter`, `length`, …) — these two conventions never overlap.
+
+#### Comparison with pythonnet
+
+```python
+# pythonnet: IList<T> is always a live reference
+origins.Add('*')    # works — reference type stays as reference
+```
+
+```typescript
+// node-ps1-dotnet default ('node-api-dotnet'):
+origins.Add('*');   // ❌ — origins is a copied JS array, not the original IList
+
+// node-ps1-dotnet pythonnet mode:
+dotnet.typeConversionBehavior = 'pythonnet';
+origins.Add('*');   // ✅ — ref proxy, mutation goes through
+```
+
+#### Known limitations
+
+- `IDictionary<K,V>` is not yet affected by pythonnet mode (always returned as `Map`). This will be addressed in a future update.
+- The `length` getter, `Symbol.iterator`, and all read methods make synchronous IPC round-trips each time they are called. For large collections accessed in a tight loop, materialise once with `[...list]` and work on the JS array.
+
 
 1. **Event API**: `add_Click(cb)` currently has no corresponding implementation in `node-api-dotnet`; wait for official support.
 2. **Platform Detection**: `node-ps1-dotnet` is Windows only; if cross-platform is needed, switch to `node-api-dotnet` and ensure .NET 6+ runtime is present.

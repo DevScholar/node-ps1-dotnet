@@ -9,6 +9,15 @@ using System.Web.Script.Serialization;
 
 public static class Protocol
 {
+    /// <summary>
+    /// When false (default, 'node-api-dotnet' mode): generic IList&lt;T&gt; is serialised to a
+    /// JS array (value copy, like node-api-dotnet).
+    /// When true ('pythonnet' mode): generic IList&lt;T&gt; is returned as a ref proxy so that
+    /// mutations (Add/Remove/Clear) from JS are reflected on the original .NET object.
+    /// Set via the SetConversionBehavior IPC action.
+    /// </summary>
+    public static bool PythonNetMode = false;
+
     public static Dictionary<string, object> ConvertToProtocol(object inputObject)
     {
         if (inputObject == null)
@@ -120,15 +129,34 @@ public static class Protocol
             }
             if (isGenericIList)
             {
-                var list = (System.Collections.IList)inputObject;
-                var listResult = new List<Dictionary<string, object>>();
-                foreach (var item in list)
+                if (!PythonNetMode)
                 {
-                    listResult.Add(item == null
-                        ? new Dictionary<string, object> { { "type", "null" } }
-                        : ConvertToProtocol(item));
+                    // node-api-dotnet mode: convert to a JS array (value copy).
+                    var list = (System.Collections.IList)inputObject;
+                    var listResult = new List<Dictionary<string, object>>();
+                    foreach (var item in list)
+                    {
+                        listResult.Add(item == null
+                            ? new Dictionary<string, object> { { "type", "null" } }
+                            : ConvertToProtocol(item));
+                    }
+                    return new Dictionary<string, object> { { "type", "array" }, { "value", listResult } };
                 }
-                return new Dictionary<string, object> { { "type", "array" }, { "value", listResult } };
+                else
+                {
+                    // pythonnet mode: return a ref proxy so JS mutations (Add/Remove/Clear)
+                    // are applied to the original .NET IList<T> instance.
+                    var refId = Guid.NewGuid().ToString();
+                    BridgeState.ObjectStore[refId] = inputObject;
+                    return new Dictionary<string, object>
+                    {
+                        { "type", "ref" },
+                        { "id", refId },
+                        { "netType", inputObject.GetType().FullName },
+                        { "collectionKind", "list" },
+                        { "hasIndexer", true }
+                    };
+                }
             }
         }
 
