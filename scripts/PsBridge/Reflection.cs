@@ -28,6 +28,11 @@ public static partial class Reflection
             case "AddType":               return HandleAddType(cmd);
             case "InvokeDetached":        return HandleInvokeDetached(cmd);
             case "SetConversionBehavior": return HandleSetConversionBehavior(cmd);
+            case "MaterializeDict":       return HandleMaterializeDict(cmd);
+            case "MaterializeEnum":       return HandleMaterializeEnum(cmd);
+            case "ReadChunk":             return HandleReadChunk(cmd);
+            case "WriteChunk":            return HandleWriteChunk(cmd);
+            case "SeekStream":            return HandleSeekStream(cmd);
             default:                      return new Dictionary<string, object> { { "type", "void" } };
         }
     }

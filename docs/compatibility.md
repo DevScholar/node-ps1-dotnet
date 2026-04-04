@@ -14,8 +14,36 @@ This document describes the API compatibility between `node-ps1-dotnet` and Micr
 | Platform Support | Windows / macOS / Linux | **Windows only** (depends on WinForms/WPF) |
 | Runtime Requirements | .NET 6+ or .NET Framework 4.7.2+ | .NET Framework 4.x (via PowerShell 5.1) |
 | Performance | High (direct in-process calls) | Medium (IPC round-trip overhead per call) |
-| Event Support | Not yet implemented | **Implemented** (0/1/2 parameter delegates) |
+| Event Support | Not yet implemented | **Implemented** |
 | No Pre-compilation Required | Requires `.nupkg` or `.NET SDK` | **Not required** (`Add-Type` runtime compilation) |
+
+---
+
+## Type Conversion Reference
+
+The table below shows how each .NET type is marshalled to JavaScript.
+
+| .NET type | JS value | Notes |
+|-----------|----------|-------|
+| `string` | `string` | |
+| `bool` | `boolean` | |
+| `byte` `short` `int` `long` `float` `double` | `number` | NaN / Infinity → `null` |
+| `null` | `null` | |
+| `Enum` | `number` | integer value |
+| `Guid` | `string` | UUID format |
+| `DateTime` / `DateTimeOffset` | `Date` | UTC ISO 8601 |
+| `TimeSpan` | `number` | total milliseconds |
+| `BigInteger` | `bigint` | via `BigInt(decimalString)` |
+| `Tuple<A,B>` / `ValueTuple<A,B>` | `[A, B]` (array) | up to 8 elements |
+| `T[]` | `T[]` | value copy |
+| `IList<T>` / `List<T>` | `T[]` copy **or** ref proxy | see [Type Conversion Modes](#type-conversion-modes) |
+| `IEnumerable<T>` (not IList) | ref proxy + `Symbol.iterator` | lazy iterable; see below |
+| `IDictionary<K,V>` | `Map<K,V>` copy **or** ref proxy | see [Type Conversion Modes](#type-conversion-modes) |
+| `System.IO.Stream` | `stream.Duplex` | see [Stream Support](#stream-support) |
+| `Task<T>` | `Promise<T>` | via `await` / `dotnet.awaitTask()` |
+| ref/out params | `{ result, paramA, paramB }` | node-api-dotnet style |
+| class / interface instance | ref proxy | live .NET reference |
+| struct | ref proxy | boxed .NET reference |
 
 ---
 
@@ -37,8 +65,6 @@ dotnet.load('./MyLib.dll');
 
 `load(nameOrPath)` automatically distinguishes between assembly names (without path separators and `.dll`/`.exe` extensions) and file paths.
 
-
-
 ### Accessing Types
 
 ```typescript
@@ -46,8 +72,6 @@ dotnet.load('./MyLib.dll');
 const Button = dotnet.System.Windows.Forms.Button;
 const form   = dotnet.System.Windows.Forms.Form;
 ```
-
-After loading an assembly, its namespace is automatically merged into the `dotnet` property tree. Accessing any level of the name internally calls `GetType`: if a type is found, it returns a type reference; otherwise, it returns a namespace proxy to continue navigation downward.
 
 ### Constructing Objects
 
@@ -69,26 +93,13 @@ const text = btn.Text;            // Read property
 ### Runtime Information
 
 ```typescript
-// node-api-dotnet
-console.log(dotnet.frameworkMoniker);  // 'net472'
-console.log(dotnet.runtimeVersion);   // '4.0.30319.42000'
-
-// node-ps1-dotnet — identical
-console.log(dotnet.frameworkMoniker);
-console.log(dotnet.runtimeVersion);
+console.log(dotnet.frameworkMoniker);  // e.g. 'net472'
+console.log(dotnet.runtimeVersion);   // e.g. '4.0.30319.42000'
 ```
 
 ### Dependency Resolution Hooks
 
 ```typescript
-// node-api-dotnet
-dotnet.addListener('resolving', (name: string) => {
-    const dllName = name.split(',')[0];
-    const p = path.join('./libs', dllName + '.dll');
-    return fs.existsSync(p) ? p : null;
-});
-
-// node-ps1-dotnet — identical
 dotnet.addListener('resolving', (name: string) => {
     const dllName = name.split(',')[0];
     const p = path.join('./libs', dllName + '.dll');
@@ -96,9 +107,7 @@ dotnet.addListener('resolving', (name: string) => {
 });
 ```
 
-The callback receives the full assembly identity string (e.g., `"MyLib, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"`), and returns a file path string (from which the CLR will load) or `null` (skip, let CLR continue with default resolution).
-
-> **Note**: The current implementation only supports registering one `resolving` listener; later registrations will override previous ones.
+> **Note**: The current implementation only supports one `resolving` listener; later registrations override previous ones.
 
 ---
 
@@ -106,27 +115,22 @@ The callback receives the full assembly identity string (e.g., `"MyLib, Version=
 
 ### Event Subscription
 
-`node-api-dotnet` has not yet implemented event support. `node-ps1-dotnet` subscribes to .NET events via `add_<EventName>` methods:
-
 ```typescript
-// node-ps1-dotnet specific
 btn.add_Click((sender: any, e: any) => {
     console.log('Button clicked');
 });
 
-form.add_Load(() => {
-    console.log('Form loaded');
-});
-```
+// Synchronous handler (return value forwarded back to .NET)
+form.addSync_Closing((s, e) => { e.Cancel = true; });
 
-Supports delegate types with 0, 1, or 2 parameters (covering the vast majority of WinForms/WPF events). Delegates with 3 or more parameters are silently ignored.
+// Unsubscribe
+btn.remove_Click(handler);
+```
 
 ### WPF/WinForms Application Loop
 
 ```typescript
-// node-ps1-dotnet specific (used with node-with-window)
 dotnet.startApplication(app, window);   // Start WPF message loop (non-blocking)
-dotnet.pollEvent();                     // Poll one pending UI event
 ```
 
 ---
@@ -135,37 +139,31 @@ dotnet.pollEvent();                     // Poll one pending UI event
 
 | Feature | Description |
 |---------|-------------|
-| `dotnet.load()` return value | node-api-dotnet returns `void` (types merged into namespace tree); this project behaves the same, but internally has `GetType` IPC calls |
-| Multiple `resolving` listeners | node-api-dotnet supports chained multiple listeners; this project currently only supports one |
-| `import` static types (TypeScript) | node-api-dotnet generates `.d.ts` via `.nupkg`; this project uses dynamic `Proxy`, no static types |
+| Multiple `resolving` listeners | node-api-dotnet supports chained listeners; this project supports one |
+| `import` static types (TypeScript) | node-api-dotnet generates `.d.ts` via `.nupkg`; this project uses dynamic `Proxy` |
 | macOS / Linux | node-api-dotnet is cross-platform; this project is Windows only |
-| `Task<T>` native async/await | This project wraps Task as `Promise` via `AwaitTask` IPC call, same semantics but with additional round-trip overhead |
-
----
-
-## Migration Notes
+| `Task<T>` native async/await | Wrapped as `Promise` via poll-based IPC; same semantics, additional round-trip overhead |
 
 ---
 
 ## Type Conversion Modes
 
-`node-ps1-dotnet` supports two collection marshalling strategies, selectable at runtime via `dotnet.typeConversionBehavior`:
+`node-ps1-dotnet` supports two collection marshalling strategies, switchable at runtime:
 
 ```typescript
 dotnet.typeConversionBehavior = 'node-api-dotnet'; // default
 dotnet.typeConversionBehavior = 'pythonnet';
 ```
 
-The setting takes effect immediately for all subsequent IPC calls; it does not need to be set before `dotnet.load()`.
+The setting takes effect immediately for all subsequent IPC calls.
 
 ### `'node-api-dotnet'` (default)
 
-Mirrors Microsoft's official `node-api-dotnet` type mappings:
-
 | .NET type | JS value | Mutable from JS? |
 |-----------|----------|-----------------|
-| `IList<T>` / `List<T>` | `T[]` (copy) | No — mutations are lost |
-| `IDictionary<K,V>` | `Map<K,V>` (copy) | No — mutations are lost |
+| `IList<T>` / `List<T>` | `T[]` (value copy) | No — mutations are lost |
+| `IDictionary<K,V>` | `Map<K,V>` (value copy) | No — mutations are lost |
+| `IEnumerable<T>` (not IList) | ref proxy + `Symbol.iterator` | Read-only iteration |
 
 This is the default because it gives the most natural JS experience for read-only data.
 
@@ -175,64 +173,131 @@ Inspired by [pythonnet](https://pythonnet.github.io/pythonnet/python.html)'s rul
 
 | .NET type | JS value | Mutable from JS? |
 |-----------|----------|-----------------|
-| `IList<T>` / `List<T>` | ref proxy + JS array interface | **Yes** — `Add`, `Remove`, `Clear` apply to the original .NET object |
-| `IDictionary<K,V>` | `Map<K,V>` (copy, unchanged) | No (not yet implemented) |
+| `IList<T>` / `List<T>` | ref proxy + JS array interface | **Yes** — `Add`, `Remove`, `Clear` apply to the original object |
+| `IDictionary<K,V>` | ref proxy + JS Map interface | **Yes** — `set`, `delete`, `clear` apply to the original object |
+| `IEnumerable<T>` (not IList) | ref proxy + `Symbol.iterator` | Read-only (same as default mode) |
 
-#### List proxy: JS array interface
-
-When a `IList<T>` is returned as a ref proxy it also exposes the full JS array reading API, so existing code that reads the collection does not need to change:
+#### IList proxy: JS array interface
 
 ```typescript
 dotnet.typeConversionBehavior = 'pythonnet';
 
 const origins = nwwReg.AllowedOrigins; // ref proxy, not a copy
 
-// ── Write operations: applied to the real .NET IList<string> ──
+// ── Mutation (applied to the real .NET IList<string>) ──
 origins.Add('*');           // ✅
 origins.Remove('old');      // ✅
 origins.Clear();            // ✅
 
-// ── Read operations: JS array interface (lowercase names) ──
+// ── JS array read interface (lowercase — never clashes with .NET PascalCase) ──
 origins.length;                      // ✅  → Count
 for (const o of origins) { ... }     // ✅  → Symbol.iterator
-origins.map(o => o.toUpperCase());   // ✅  → materialises array, then maps
+[...origins];                        // ✅  → spread
+origins.map(o => o.toUpperCase());   // ✅
 origins.filter(o => o !== '*');      // ✅
-origins.forEach(o => console.log(o));// ✅
+origins.find(o => o === '*');        // ✅
 origins.includes('*');               // ✅
 origins.indexOf('*');                // ✅
-[...origins];                        // ✅  → spread via Symbol.iterator
 origins.at(-1);                      // ✅  → last element
+origins.slice(0, 2);                 // ✅
 
-// ── .NET PascalCase methods still work as normal ──
+// ── .NET PascalCase members still work ──
 origins.Contains('*');    // ✅
 origins.Count;            // ✅
-origins.IndexOf('*');     // ✅
 ```
 
-> **Why no name clash?**  .NET standard members use `PascalCase` (`Add`, `Count`, `Contains`, …) while the added JS interface uses `camelCase` (`map`, `filter`, `length`, …) — these two conventions never overlap.
-
-#### Comparison with pythonnet
-
-```python
-# pythonnet: IList<T> is always a live reference
-origins.Add('*')    # works — reference type stays as reference
-```
+#### IDictionary proxy: JS Map interface
 
 ```typescript
-// node-ps1-dotnet default ('node-api-dotnet'):
-origins.Add('*');   // ❌ — origins is a copied JS array, not the original IList
-
-// node-ps1-dotnet pythonnet mode:
 dotnet.typeConversionBehavior = 'pythonnet';
-origins.Add('*');   // ✅ — ref proxy, mutation goes through
+
+const headers = response.Headers; // ref proxy to Dictionary<string,string>
+
+// ── Mutation ──
+headers.set('X-Custom', 'value');   // ✅  → set_Item
+headers.delete('X-Unused');         // ✅  → Remove
+headers.clear();                    // ✅  → Clear
+
+// ── Read (JS Map interface) ──
+headers.get('Content-Type');        // ✅  → get_Item
+headers.has('Authorization');       // ✅  → ContainsKey
+headers.size;                       // ✅  → Count
+for (const [k, v] of headers) { }  // ✅  → Symbol.iterator (materialises snapshot)
+headers.keys();                     // ✅
+headers.values();                   // ✅
+headers.entries();                  // ✅
+headers.forEach((v, k) => { });     // ✅
+
+// ── .NET PascalCase members still work ──
+headers.Count;                  // ✅
+headers.ContainsKey('Accept');  // ✅
 ```
 
-#### Known limitations
+#### IEnumerable\<T\> proxy (both modes)
 
-- `IDictionary<K,V>` is not yet affected by pythonnet mode (always returned as `Map`). This will be addressed in a future update.
-- The `length` getter, `Symbol.iterator`, and all read methods make synchronous IPC round-trips each time they are called. For large collections accessed in a tight loop, materialise once with `[...list]` and work on the JS array.
+Types that implement `IEnumerable<T>` but not `IList<T>` (e.g. `HashSet<T>`, `Queue<T>`, LINQ results) are always returned as ref proxies with a JS iterable interface:
 
+```typescript
+const set = obj.UniqueNames; // HashSet<string> → ref proxy
 
-1. **Event API**: `add_Click(cb)` currently has no corresponding implementation in `node-api-dotnet`; wait for official support.
-2. **Platform Detection**: `node-ps1-dotnet` is Windows only; if cross-platform is needed, switch to `node-api-dotnet` and ensure .NET 6+ runtime is present.
-3. **IPC Overhead**: Every property read/method call in `node-ps1-dotnet` has IPC round-trip overhead; for performance-sensitive scenarios, switching to `node-api-dotnet` can provide orders-of-magnitude performance improvements.
+for (const name of set) { ... }        // ✅  → Symbol.iterator
+[...set];                              // ✅
+set.map(n => n.toUpperCase());         // ✅  (materialises then maps)
+set.filter(n => n.length > 3);        // ✅
+set.includes('Alice');                 // ✅
+```
+
+> **Why no name clash?** .NET standard members use `PascalCase` (`Add`, `Count`, `Contains`, …) while the JS interfaces use `camelCase` (`map`, `filter`, `length`, `get`, `set`, …) — these two naming conventions never overlap.
+
+#### Performance note
+
+JS read methods (`map`, `filter`, `forEach`, etc.) on list/enumerable proxies materialise all items via IPC each time they are called. For large collections accessed in a tight loop, materialise once:
+
+```typescript
+const arr = [...list]; // one IPC snapshot
+arr.map(...)
+arr.filter(...)
+```
+
+---
+
+## Stream Support
+
+`System.IO.Stream` subclasses are automatically marshalled as Node.js `stream.Duplex` objects.
+
+```typescript
+const ms = new dotnet.System.IO.MemoryStream();
+
+// Write to the .NET stream via Node.js writable interface
+import { pipeline } from 'node:stream/promises';
+await pipeline(nodeReadable, ms);
+
+// Read from the .NET stream
+ms.seek(0);               // seek to beginning (available when canSeek=true)
+const chunks: Buffer[] = [];
+for await (const chunk of ms) chunks.push(chunk);
+const data = Buffer.concat(chunks);
+
+// Access .NET Stream properties directly via __ref
+console.log(ms.Length);  // ✅ — .NET property via ref proxy
+console.log(ms.Position);
+```
+
+**Properties on the returned Duplex:**
+
+| Property / method | Description |
+|-------------------|-------------|
+| `duplex.__ref` | The .NET object ref — use for direct .NET property/method access |
+| `duplex.seek(offset, origin?)` | Calls `Stream.Seek(offset, origin)` — only present when `canSeek=true` |
+
+**`origin` values for `seek`:** `0` = Begin (default), `1` = Current, `2` = End.
+
+> **Warning**: The Duplex `_read` implementation calls `Stream.Read()` synchronously over the IPC channel. This is fine for in-memory or local file streams. Avoid wrapping slow network streams — they will block the Node.js event loop until data arrives.
+
+---
+
+## Migration Notes
+
+1. **Event API**: `add_Click(cb)` / `remove_Click(cb)` have no equivalent in `node-api-dotnet` yet; wait for official support.
+2. **Platform**: `node-ps1-dotnet` is Windows only. For cross-platform use, switch to `node-api-dotnet` with .NET 6+.
+3. **IPC Overhead**: Every property read / method call in `node-ps1-dotnet` has an IPC round-trip. For performance-sensitive code, batching reads or switching to `node-api-dotnet` can provide orders-of-magnitude improvement.

@@ -112,6 +112,25 @@ public static class Protocol
             return new Dictionary<string, object> { { "type", "array" }, { "value", tupleItems } };
         }
 
+        // ValueTuple<A,B,...> → JS array (fields Item1, Item2, … unlike Tuple which uses properties)
+        if (IsNetValueTuple(inputObject.GetType()))
+        {
+            var vtItems = new List<Dictionary<string, object>>();
+            for (var i = 1; i <= 8; i++)
+            {
+                var itemField = inputObject.GetType().GetField("Item" + i, BindingFlags.Public | BindingFlags.Instance);
+                if (itemField == null) break;
+                vtItems.Add(ConvertToProtocol(itemField.GetValue(inputObject)));
+            }
+            return new Dictionary<string, object> { { "type", "array" }, { "value", vtItems } };
+        }
+
+        // BigInteger → JS bigint (sent as decimal string; JS side calls BigInt(str))
+        if (inputObject.GetType().FullName == "System.Numerics.BigInteger")
+        {
+            return new Dictionary<string, object> { { "type", "bigint" }, { "value", inputObject.ToString() } };
+        }
+
         // Generic IList<T> / List<T> → JS array  (node-api-dotnet: IList<T> => T[])
         // Non-generic IList implementations (ControlCollection, UIElementCollection, etc.)
         // are intentionally left as ref proxies so callers can still use .Add()/.Remove() etc.
@@ -158,11 +177,51 @@ public static class Protocol
                     };
                 }
             }
+
+            // Generic IEnumerable<T> (but not IList<T>) → iterable ref proxy.
+            // node-api-dotnet: IEnumerable<T> => Iterable<T> (lazy, read-only iteration).
+            // Both modes behave the same here; JS side attaches Symbol.iterator.
+            var isGenericIEnumerable = false;
+            foreach (var iface2 in inputObject.GetType().GetInterfaces())
+            {
+                if (iface2.IsGenericType &&
+                    iface2.GetGenericTypeDefinition() == typeof(System.Collections.Generic.IEnumerable<>))
+                {
+                    isGenericIEnumerable = true;
+                    break;
+                }
+            }
+            if (isGenericIEnumerable)
+            {
+                var enumRefId = Guid.NewGuid().ToString();
+                BridgeState.ObjectStore[enumRefId] = inputObject;
+                return new Dictionary<string, object>
+                {
+                    { "type", "ref" },
+                    { "id", enumRefId },
+                    { "netType", inputObject.GetType().FullName },
+                    { "collectionKind", "enumerable" }
+                };
+            }
         }
 
         // IDictionary<K,V> → JS Map<K,V> (node-api-dotnet: IDictionary<K,V> => Map<K,V>)
         if (inputObject is System.Collections.IDictionary)
         {
+            if (PythonNetMode)
+            {
+                // pythonnet mode: return a ref proxy so JS mutations (set/delete/clear)
+                // are applied to the original .NET dictionary instance.
+                var dictRefId = Guid.NewGuid().ToString();
+                BridgeState.ObjectStore[dictRefId] = inputObject;
+                return new Dictionary<string, object>
+                {
+                    { "type", "ref" },
+                    { "id", dictRefId },
+                    { "netType", inputObject.GetType().FullName },
+                    { "collectionKind", "map" }
+                };
+            }
             var dict = (System.Collections.IDictionary)inputObject;
             var entries = new List<object>();
             foreach (System.Collections.DictionaryEntry entry in dict)
@@ -181,6 +240,23 @@ public static class Protocol
 
         var objRefId = Guid.NewGuid().ToString();
         BridgeState.ObjectStore[objRefId] = inputObject;
+
+        // System.IO.Stream → Node.js Duplex
+        // Exposed as {type:'stream'} so the JS side can wrap it in a real Duplex.
+        // ReadChunk / WriteChunk IPC actions transfer data as base64 strings.
+        if (inputObject is System.IO.Stream)
+        {
+            var stream = (System.IO.Stream)inputObject;
+            return new Dictionary<string, object>
+            {
+                { "type", "stream" },
+                { "id", objRefId },
+                { "netType", inputObject.GetType().FullName },
+                { "canRead", stream.CanRead },
+                { "canWrite", stream.CanWrite },
+                { "canSeek", stream.CanSeek }
+            };
+        }
 
         var refResult = new Dictionary<string, object>
         {
@@ -206,6 +282,14 @@ public static class Protocol
         var fn = type.FullName;
         // Matches System.Tuple`1, System.Tuple`2, ... System.Tuple`8
         return fn != null && fn.StartsWith("System.Tuple`");
+    }
+
+    private static bool IsNetValueTuple(Type type)
+    {
+        if (type == null) return false;
+        var fn = type.FullName;
+        // Matches System.ValueTuple`1 .. System.ValueTuple`8 (available in .NET 4.7+)
+        return fn != null && fn.StartsWith("System.ValueTuple`");
     }
 
     public static object[] ResolveArgs(object argsObj)

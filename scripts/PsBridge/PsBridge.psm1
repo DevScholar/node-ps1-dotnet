@@ -1,18 +1,11 @@
 # scripts/PsBridge/PsBridge.psm1
 $scriptDir = Split-Path $MyInvocation.MyCommand.Path
 
-$csFiles = @(
-    "$scriptDir\BridgeState.cs",
-    "$scriptDir\Protocol.cs",
-    "$scriptDir\Reflection.cs",
-    "$scriptDir\Reflection.TypeResolution.cs",
-    "$scriptDir\Reflection.ObjectLifecycle.cs",
-    "$scriptDir\Reflection.Events.cs",
-    "$scriptDir\Reflection.Invocation.cs",
-    "$scriptDir\Reflection.AssemblyLoader.cs",
-    "$scriptDir\PsHost.cs",
-    "$scriptDir\PsHostEntry.cs"
-)
+# Automatically include every .cs file in this directory.
+# Add-Type compiles them all in one batch so partial classes and cross-file
+# references are resolved correctly; listing order is irrelevant.
+$csFiles = Get-ChildItem -Path $scriptDir -Filter "*.cs" |
+           Select-Object -ExpandProperty FullName
 
 $referencedAssemblies = @(
     'System.dll',

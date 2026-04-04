@@ -1,5 +1,6 @@
 import { getIpc } from './state.js';
 import { randomUUID } from 'node:crypto';
+import { Duplex } from 'node:stream';
 
 export let node_ps1_dotnetGetter: (() => any) | null = null;
 
@@ -219,7 +220,7 @@ function marshalArgs(args: any[]): any[] {
 // inlineProps: pre-fetched property values attached to event args, avoids extra round-trips.
 // hasIndexer: true when the .NET type exposes a get_Item/set_Item indexer (e.g. IList, custom indexers).
 // isTask: true when the object is a Task, enabling await support via then() method.
-function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?: boolean, isTask?: boolean, collectionKind?: 'list'): any {
+function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?: boolean, isTask?: boolean, collectionKind?: 'list' | 'map' | 'enumerable'): any {
     const ipc = getIpc();
     if (!ipc) throw new Error('IPC not initialized');
 
@@ -243,6 +244,31 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
               }
             : null;
     const _listToArr: (() => any[]) | null = _listIter ? () => [..._listIter!()] : null;
+
+    // ── Map collection helpers (pythonnet mode for IDictionary) ───────────────
+    // Materialises the full dict via IPC; used for iteration/snapshot methods.
+    const _mapToMap: (() => Map<any, any>) | null =
+        collectionKind === 'map'
+            ? () => {
+                const res = ipc!.send({ action: 'MaterializeDict', targetId: id } as any) as any;
+                return new Map(
+                    (res.entries as any[][]).map(
+                        (pair: any[]) => [createProxy(pair[0]), createProxy(pair[1])] as [any, any]
+                    )
+                );
+              }
+            : null;
+
+    // ── Enumerable helpers (IEnumerable<T> ref proxy) ─────────────────────────
+    // Materialises via IPC; used for iteration and array-style read methods.
+    const _enumToArr: (() => any[]) | null =
+        collectionKind === 'enumerable'
+            ? () => {
+                const res = ipc!.send({ action: 'MaterializeEnum', targetId: id } as any) as any;
+                if (res.type === 'array') return (res.value as any[]).map((item: any) => createProxy(item));
+                return [];
+              }
+            : null;
 
     class Stub {}
 
@@ -310,6 +336,10 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
             if (typeof prop === 'symbol') {
                 if (_listIter && prop === Symbol.iterator) return _listIter;
                 if (_listIter && prop === Symbol.toStringTag) return 'DotNetList';
+                if (_mapToMap && prop === Symbol.iterator) return () => _mapToMap!()[Symbol.iterator]();
+                if (_mapToMap && prop === Symbol.toStringTag) return 'DotNetMap';
+                if (_enumToArr && prop === Symbol.iterator) return function*() { for (const item of _enumToArr!()) yield item; };
+                if (_enumToArr && prop === Symbol.toStringTag) return 'DotNetEnumerable';
                 return undefined;
             }
 
@@ -336,6 +366,46 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
                 if (prop === 'flat')       return (...a: any[]) => (_listToArr!() as any).flat(...a);
                 if (prop === 'flatMap')    return (fn: any) => _listToArr!().flatMap(fn);
                 if (prop === 'toString')   return () => '[DotNetList]';
+            }
+
+            // ── Map collection JS interface (pythonnet mode for IDictionary) ───
+            // Lowercase names (get/set/has/delete/size...) never clash with .NET PascalCase.
+            if (_mapToMap !== null) {
+                if (prop === 'size')    return (ipc!.send({ action: 'Invoke', targetId: id, methodName: 'Count', args: [] }) as any).value;
+                if (prop === 'get')     return (key: any) => createProxy(ipc!.send({ action: 'Invoke', targetId: id, methodName: 'get_Item', args: marshalArgs([key]) }));
+                if (prop === 'set')     return (key: any, val: any) => { ipc!.send({ action: 'Invoke', targetId: id, methodName: 'set_Item', args: marshalArgs([key, val]) }); };
+                if (prop === 'has')     return (key: any) => createProxy(ipc!.send({ action: 'Invoke', targetId: id, methodName: 'ContainsKey', args: marshalArgs([key]) }));
+                if (prop === 'delete')  return (key: any) => createProxy(ipc!.send({ action: 'Invoke', targetId: id, methodName: 'Remove', args: marshalArgs([key]) }));
+                if (prop === 'clear')   return () => { ipc!.send({ action: 'Invoke', targetId: id, methodName: 'Clear', args: [] }); };
+                if (prop === 'keys')    return () => _mapToMap!().keys();
+                if (prop === 'values')  return () => _mapToMap!().values();
+                if (prop === 'entries') return () => _mapToMap!().entries();
+                if (prop === 'forEach') return (fn: any) => _mapToMap!().forEach(fn);
+                if (prop === 'toString') return () => '[DotNetMap]';
+            }
+
+            // ── Enumerable JS interface (IEnumerable<T> ref proxy) ───────────
+            if (_enumToArr !== null) {
+                if (prop === 'length')     return _enumToArr!().length;
+                if (prop === 'map')        return (fn: any) => _enumToArr!().map(fn);
+                if (prop === 'filter')     return (fn: any) => _enumToArr!().filter(fn);
+                if (prop === 'forEach')    return (fn: any) => _enumToArr!().forEach(fn);
+                if (prop === 'find')       return (fn: any) => _enumToArr!().find(fn);
+                if (prop === 'findIndex')  return (fn: any) => _enumToArr!().findIndex(fn);
+                if (prop === 'some')       return (fn: any) => _enumToArr!().some(fn);
+                if (prop === 'every')      return (fn: any) => _enumToArr!().every(fn);
+                if (prop === 'reduce')     return (...a: any[]) => (_enumToArr!() as any).reduce(...a);
+                if (prop === 'includes')   return (item: any) => _enumToArr!().includes(item);
+                if (prop === 'indexOf')    return (item: any) => _enumToArr!().indexOf(item);
+                if (prop === 'at')         return (i: number) => { const a = _enumToArr!(); return i < 0 ? a[a.length + i] : a[i]; };
+                if (prop === 'join')       return (...a: any[]) => (_enumToArr!() as any).join(...a);
+                if (prop === 'slice')      return (...a: any[]) => _enumToArr!().slice(...a);
+                if (prop === 'entries')    return () => _enumToArr!().entries();
+                if (prop === 'keys')       return () => _enumToArr!().keys();
+                if (prop === 'values')     return () => _enumToArr!().values();
+                if (prop === 'flat')       return (...a: any[]) => (_enumToArr!() as any).flat(...a);
+                if (prop === 'flatMap')    return (fn: any) => _enumToArr!().flatMap(fn);
+                if (prop === 'toString')   return () => '[DotNetEnumerable]';
             }
 
             // Numeric index → .NET indexer (obj[0], obj[1], ...)
@@ -503,6 +573,69 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
     return proxy;
 }
 
+// Wraps a .NET System.IO.Stream ref as a Node.js Duplex stream.
+// Data is transferred as base64 strings over the synchronous IPC channel.
+// WARNING: _read() calls Stream.Read() synchronously — avoid slow network streams
+// as they will block the Node.js thread until data arrives.
+function createStreamDuplex(meta: any): Duplex {
+    const id: string = meta.id;
+    const ipc = getIpc();
+
+    const duplex = new Duplex({
+        read(size: number) {
+            try {
+                const res = ipc!.send({ action: 'ReadChunk', targetId: id, size } as any) as any;
+                if (res.type === 'null') {
+                    this.push(null); // EOF
+                } else {
+                    this.push(Buffer.from(res.value as string, 'base64'));
+                }
+            } catch (err) {
+                this.destroy(err as Error);
+            }
+        },
+        write(chunk: Buffer | string, encoding: BufferEncoding, callback: (err?: Error | null) => void) {
+            try {
+                const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string, encoding);
+                ipc!.send({ action: 'WriteChunk', targetId: id, data: buf.toString('base64') } as any);
+                callback();
+            } catch (err) {
+                callback(err as Error);
+            }
+        },
+        final(callback: (err?: Error | null) => void) {
+            try {
+                ipc!.send({ action: 'Invoke', targetId: id, methodName: 'Flush', args: [] });
+                callback();
+            } catch (err) {
+                callback(err as Error);
+            }
+        },
+        destroy(err: Error | null, callback: (err?: Error | null) => void) {
+            try {
+                ipc!.send({ action: 'Invoke', targetId: id, methodName: 'Close', args: [] });
+            } catch {}
+            callback(err);
+        }
+    });
+
+    // If stream is read-only, end writable side immediately
+    if (!meta.canWrite) duplex.end();
+    // If stream is write-only, end readable side immediately
+    if (!meta.canRead) duplex.push(null);
+
+    // Expose .NET ref so callers can still access .NET stream properties (Length, Position, etc.)
+    (duplex as any).__ref = id;
+    // Expose seek helper for seekable streams
+    if (meta.canSeek) {
+        (duplex as any).seek = (offset: number, origin: 0 | 1 | 2 = 0) =>
+            (ipc!.send({ action: 'SeekStream', targetId: id, offset, origin } as any) as any).value;
+    }
+
+    gcRegistry.register(duplex, id);
+    return duplex;
+}
+
 export function createProxyWithInlineProps(meta: any): any {
     if (meta.type !== 'ref') return createProxy(meta);
     return makeRefProxy(meta.id, meta.props || {}, meta.hasIndexer === true);
@@ -515,6 +648,9 @@ export function createProxy(meta: any): any {
     if (meta.type === 'error') throw new Error(meta.message || 'Unknown .NET error');
 
     if (meta.type === 'primitive' || meta.type === 'null') return meta.value;
+
+    // BigInteger → JS bigint
+    if (meta.type === 'bigint') return BigInt(meta.value);
 
     // DateTime/DateTimeOffset → JS Date  (node-api-dotnet: DateTime => Date)
     if (meta.type === 'date') return new Date(meta.value);
@@ -545,6 +681,9 @@ export function createProxy(meta: any): any {
         return createLazyArray(arr);
     }
 
+    // System.IO.Stream → Node.js Duplex  (node-api-dotnet: Stream => StreamDuplex)
+    if (meta.type === 'stream') return createStreamDuplex(meta);
+
     if (meta.type === 'task') {
         // Return a proxy ref to the Task — do NOT auto-await here.
         // Sync task.Wait() on the UI thread causes deadlocks for Tasks that need
@@ -567,6 +706,10 @@ export function createProxy(meta: any): any {
 
     if (meta.type !== 'ref') return null;
 
-    const ck: 'list' | undefined = (meta as any).collectionKind === 'list' ? 'list' : undefined;
+    const ck: 'list' | 'map' | 'enumerable' | undefined =
+        (meta as any).collectionKind === 'list'       ? 'list' :
+        (meta as any).collectionKind === 'map'        ? 'map' :
+        (meta as any).collectionKind === 'enumerable' ? 'enumerable' :
+        undefined;
     return makeRefProxy(meta.id, undefined, meta.hasIndexer === true, false, ck);
 }
