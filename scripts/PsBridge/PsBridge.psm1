@@ -5,6 +5,11 @@ $csFiles = @(
     "$scriptDir\BridgeState.cs",
     "$scriptDir\Protocol.cs",
     "$scriptDir\Reflection.cs",
+    "$scriptDir\Reflection.TypeResolution.cs",
+    "$scriptDir\Reflection.ObjectLifecycle.cs",
+    "$scriptDir\Reflection.Events.cs",
+    "$scriptDir\Reflection.Invocation.cs",
+    "$scriptDir\Reflection.AssemblyLoader.cs",
     "$scriptDir\PsHost.cs",
     "$scriptDir\PsHostEntry.cs"
 )
