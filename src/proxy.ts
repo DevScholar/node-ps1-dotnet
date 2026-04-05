@@ -62,32 +62,20 @@ export let pollingMode = false;
 export function setPollingMode(val: boolean) { pollingMode = val; }
 
 // Dispatch a batch of serialised event strings (from a Poll response) synchronously.
-// Used both by the regular setInterval poller and by the ShowDialog spin-poll loop.
-//
-// Coalescing: if the same callbackId appears multiple times in one batch, only the
-// last occurrence is dispatched. This matches OS-level WM_MOUSEMOVE coalescing —
-// for high-frequency positional events (drag, scroll) only the latest value matters,
-// and processing stale intermediate values would accumulate errors.
+// Used by the awaitTask spin-poll loop.
 export function dispatchPollEvents(events: string[]): void {
-    // Parse all events, keeping only the last entry per callbackId.
-    const coalesced = new Map<string, any>();
     for (const evtStr of events) {
         try {
             const evt = JSON.parse(evtStr);
-            coalesced.set(evt.callbackId, evt);
+            const cb = callbackRegistry.get(evt.callbackId);
+            if (cb) {
+                const wrappedArgs = (evt.args || []).map((arg: any) => {
+                    if (arg && arg.type === 'ref' && arg.props) return createProxyWithInlineProps(arg);
+                    return createProxy(arg);
+                });
+                try { cb(...wrappedArgs, evt.error || null); } catch {}
+            }
         } catch {}
-    }
-    for (const evt of coalesced.values()) {
-        const cb = callbackRegistry.get(evt.callbackId);
-        if (cb) {
-            const wrappedArgs = (evt.args || []).map((arg: any) => {
-                if (arg && arg.type === 'ref' && arg.props) return createProxyWithInlineProps(arg);
-                return createProxy(arg);
-            });
-            try { 
-                cb(...wrappedArgs, evt.error || null);
-            } catch {}
-        }
     }
 }
 export const LARGE_ARRAY_THRESHOLD = 50;
@@ -430,26 +418,14 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
                 return val;
             }
 
+            // add_EventName: C# blocks the event handler thread until the JS callback
+            // returns. The return value is forwarded back to the .NET event handler,
+            // allowing synchronous influence on .NET behavior (e.g. e.Cancel = true).
+            // Nested IPC calls inside the callback are supported via RunProcessNestedCommands.
             if (prop.startsWith('add_')) {
                 const eventName = prop.substring(4);
                 return (callback: Function) => {
                     const cbId = `cb_${randomUUID()}`;
-                    callbackRegistry.set(cbId, callback);
-                    // Track so this callback is cleaned up when the object is released
-                    if (!objectEventMap.has(id)) objectEventMap.set(id, new Map());
-                    objectEventMap.get(id)!.set(cbId, { callback, eventName });
-                    ipc.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
-                };
-            }
-
-            // addSync_EventName: like add_EventName but C# blocks until the JS handler
-            // returns, and the return value is forwarded back to the .NET event handler.
-            // Use this for events where the handler must influence .NET behavior synchronously,
-            // e.g. obj.addSync_Closing((s, e) => { e.Cancel = true; })
-            if (prop.startsWith('addSync_')) {
-                const eventName = prop.substring(8);
-                return (callback: Function) => {
-                    const cbId = `cbsync_${randomUUID()}`;
                     callbackRegistry.set(cbId, callback);
                     if (!objectEventMap.has(id)) objectEventMap.set(id, new Map());
                     objectEventMap.get(id)!.set(cbId, { callback, eventName });
@@ -458,8 +434,8 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
             }
 
             // remove_EventName(callback) — mirrors .NET event -= pattern
-            if (prop.startsWith('remove_') || prop.startsWith('removeSync_')) {
-                const eventName = prop.startsWith('removeSync_') ? prop.substring(11) : prop.substring(7);
+            if (prop.startsWith('remove_')) {
+                const eventName = prop.substring(7);
                 return (callback: Function) => {
                     const events = objectEventMap.get(id);
                     if (!events) return;

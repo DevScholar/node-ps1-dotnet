@@ -79,49 +79,6 @@ public static partial class Reflection
         return new Dictionary<string, object> { { "type", "void" } };
     }
 
-    private static Dictionary<string, object> HandleAddEvent(Dictionary<string, object> cmd)
-    {
-        var target = BridgeState.ObjectStore[cmd["targetId"].ToString()];
-        var eventName = cmd["eventName"].ToString();
-        var cbId = cmd["callbackId"].ToString();
-
-        var eventInfo = target.GetType().GetEvent(eventName);
-        if (eventInfo != null)
-        {
-            var delegateType = eventInfo.EventHandlerType;
-            var invokeMethod = delegateType.GetMethod("Invoke");
-            var parameters = invokeMethod.GetParameters();
-
-            // Build a lambda matching the exact delegate signature, box all args, call SendEventToJs.
-            // Expression.Lambda handles any parameter count with no fixed upper limit.
-            var paramExprs = new System.Linq.Expressions.ParameterExpression[parameters.Length];
-            for (var pi = 0; pi < parameters.Length; pi++)
-            {
-                paramExprs[pi] = System.Linq.Expressions.Expression.Parameter(parameters[pi].ParameterType, "p" + pi);
-            }
-
-            var boxedExprs = new System.Linq.Expressions.Expression[parameters.Length];
-            for (var pi = 0; pi < parameters.Length; pi++)
-            {
-                boxedExprs[pi] = System.Linq.Expressions.Expression.Convert(paramExprs[pi], typeof(object));
-            }
-
-            var argsArrayExpr = System.Linq.Expressions.Expression.NewArrayInit(typeof(object), boxedExprs);
-            var sendMethod = typeof(Reflection).GetMethod("SendEventToJs", BindingFlags.NonPublic | BindingFlags.Static);
-            var cbIdExpr = System.Linq.Expressions.Expression.Constant(cbId, typeof(string));
-            var callExpr = System.Linq.Expressions.Expression.Call(sendMethod, cbIdExpr, argsArrayExpr);
-            var lambdaExpr = System.Linq.Expressions.Expression.Lambda(delegateType, callExpr, paramExprs);
-            Delegate handler = lambdaExpr.Compile();
-
-            eventInfo.AddEventHandler(target, handler);
-            // Persist handler so RemoveEvent can unsubscribe later
-            var storeKey = cmd["targetId"].ToString() + ":" + eventName + ":" + cbId;
-            BridgeState.EventHandlerStore[storeKey] = handler;
-        }
-
-        return new Dictionary<string, object> { { "type", "void" } };
-    }
-
     private static Dictionary<string, object> HandleSetResolvingCallback(Dictionary<string, object> cmd)
     {
         var cbId = cmd["callbackId"].ToString();
@@ -293,21 +250,4 @@ public static partial class Reflection
         return result;
     }
 
-    private static void SendEventToJs(string cbId, object[] args)
-    {
-        var protoArgs = new List<Dictionary<string, object>>();
-        foreach (var arg in args)
-        {
-            protoArgs.Add(arg == null
-                ? new Dictionary<string, object> { { "type", "null" } }
-                : Protocol.ConvertToProtocol(arg));
-        }
-        var msg = new Dictionary<string, object>
-        {
-            { "type", "event" },
-            { "callbackId", cbId },
-            { "args", protoArgs }
-        };
-        BridgeState.EventQueue.Enqueue(SimpleJson.Serialize(msg));
-    }
 }
