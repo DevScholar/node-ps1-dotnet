@@ -16,7 +16,7 @@ public static partial class Reflection
             case "GetTypeName":           return HandleGetTypeName(cmd);
             case "InspectType":           return HandleInspectType(cmd);
             case "RemoveEvent":           return HandleRemoveEvent(cmd);
-            case "AddSyncEvent":          return HandleAddSyncEvent(cmd);
+            case "AddEvent":              return HandleAddEvent(cmd);
             case "New":                   return HandleNew(cmd);
             case "Invoke":                return HandleInvoke(cmd);
             case "AwaitTask":             return HandleAwaitTask(cmd);

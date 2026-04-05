@@ -29,7 +29,7 @@ public static partial class Reflection
         return new Dictionary<string, object> { { "type", "void" } };
     }
 
-    private static Dictionary<string, object> HandleAddSyncEvent(Dictionary<string, object> cmd)
+    private static Dictionary<string, object> HandleAddEvent(Dictionary<string, object> cmd)
     {
         var target = BridgeState.ObjectStore[cmd["targetId"].ToString()];
         var eventName = cmd["eventName"].ToString();

@@ -429,7 +429,7 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
                     callbackRegistry.set(cbId, callback);
                     if (!objectEventMap.has(id)) objectEventMap.set(id, new Map());
                     objectEventMap.get(id)!.set(cbId, { callback, eventName });
-                    ipc.send({ action: 'AddSyncEvent', targetId: id, eventName, callbackId: cbId });
+                    ipc.send({ action: 'AddEvent', targetId: id, eventName, callbackId: cbId });
                 };
             }
 
