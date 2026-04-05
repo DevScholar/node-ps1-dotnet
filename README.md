@@ -4,7 +4,7 @@ This project is in Beta stage.
 
 This is a project that mimics the [Node API for .NET](https://github.com/microsoft/node-api-dotnet), aiming to utilize the built-in PowerShell 5.1 and .NET Framework 4.x in Windows to replace the full high-version .NET runtime, thereby reducing the program's size. Since this project uses IPC instead of C++ Addon, it is compatible not only with Node but also with Deno and Bun.
 
-The library exposes a `dotnet` proxy that lets you load and interact with arbitrary .NET types (WinForms, WPF, reflection, I/O, etc.) from JavaScript/TypeScript. It does **not** bundle any UI framework — if you want a WebView2-based window API, use [@devscholar/node-with-window](https://github.com/DevScholar/node-with-window) instead.
+Moreover, this project supports .NET events and optional Python.NET-style type conversions, and also provides examples of common built-in .NET GUI frameworks. This makes writing GUI programs in Node PS1 for .NET very easy. However, Node API for .NET does not support these features, so you cannot write any GUI programs using only Node API for .NET.
 
 # Requirements
 
