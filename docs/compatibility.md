@@ -120,12 +120,14 @@ btn.add_Click((sender: any, e: any) => {
     console.log('Button clicked');
 });
 
-// Synchronous handler (return value forwarded back to .NET)
-form.addSync_Closing((s, e) => { e.Cancel = true; });
+// Return value is forwarded back to .NET — works for all events
+form.add_Closing((s, e) => { e.Cancel = true; });
 
 // Unsubscribe
 btn.remove_Click(handler);
 ```
+
+All `add_*` handlers are synchronous: the .NET event handler thread blocks until the JS callback returns. The return value is forwarded back to .NET, so patterns like `e.Cancel = true` or returning a response object work without any special API variant. Nested IPC calls inside the callback are also supported.
 
 ### WPF/WinForms Application Loop
 
