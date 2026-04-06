@@ -17,6 +17,9 @@ public static partial class Reflection
             case "InspectType":           return HandleInspectType(cmd);
             case "RemoveEvent":           return HandleRemoveEvent(cmd);
             case "AddEvent":              return HandleAddEvent(cmd);
+            case "AddAsyncEvent":         return HandleAddAsyncEvent(cmd);
+            case "AddDeferredEvent":      return HandleAddDeferredEvent(cmd);
+            case "CompleteDeferral":      return HandleCompleteDeferral(cmd);
             case "New":                   return HandleNew(cmd);
             case "Invoke":                return HandleInvoke(cmd);
             case "AwaitTask":             return HandleAwaitTask(cmd);

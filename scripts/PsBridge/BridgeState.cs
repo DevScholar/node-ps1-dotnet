@@ -21,10 +21,15 @@ public static class BridgeState
     // drained by the Poll command on the UI/command thread.
     public static ConcurrentQueue<string> EventQueue { get; private set; }
 
+    // Stores pending deferrals for async event completion (e.g. WebResourceRequested).
+    // Key: deferralId → value: object[] { deferral, eventArgs, sender }
+    public static ConcurrentDictionary<string, object[]> DeferralStore { get; private set; }
+
     static BridgeState()
     {
         ObjectStore = new ConcurrentDictionary<string, object>();
         EventHandlerStore = new ConcurrentDictionary<string, Delegate>();
         EventQueue = new ConcurrentQueue<string>();
+        DeferralStore = new ConcurrentDictionary<string, object[]>();
     }
 }

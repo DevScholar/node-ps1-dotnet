@@ -24,6 +24,42 @@ export const typeNameCache = new Map<string, string>();
 // Used to clean up callbackRegistry entries when an object is released (GC or manual).
 const objectEventMap = new Map<string, Map<string, { callback: Function; eventName: string }>>();
 
+/**
+ * Register an async (fire-and-forget) event handler via EventQueue instead of
+ * FireSyncEventAndWait.  The callback runs during normal poll dispatch at
+ * syncEventDepth=0, so ShowDialog spin-polls and other blocking patterns work.
+ */
+export function addAsyncEvent(targetRef: string, eventName: string, callback: Function): void {
+    const ipc = getIpc();
+    if (!ipc) throw new Error('IPC not initialized');
+    const cbId = `cb_${randomUUID()}`;
+    callbackRegistry.set(cbId, callback);
+    if (!objectEventMap.has(targetRef)) objectEventMap.set(targetRef, new Map());
+    objectEventMap.get(targetRef)!.set(cbId, { callback, eventName });
+    ipc.send({ action: 'AddAsyncEvent', targetId: targetRef, eventName, callbackId: cbId } as any);
+}
+
+/**
+ * Register a deferred event handler via GetDeferral() + EventQueue.
+ * The callback runs during poll dispatch at syncEventDepth=0.
+ * Its return value is automatically sent back to C# as CompleteDeferral,
+ * allowing the C# side to apply the response (e.g. WebResourceResponse)
+ * and call deferral.Complete().
+ *
+ * Use this for events that need a synchronous return value from JS
+ * (like WebResourceRequested) but would deadlock if handled via
+ * FireSyncEventAndWait during ShowDialog or other blocking operations.
+ */
+export function addDeferredEvent(targetRef: string, eventName: string, callback: Function): void {
+    const ipc = getIpc();
+    if (!ipc) throw new Error('IPC not initialized');
+    const cbId = `cb_${randomUUID()}`;
+    callbackRegistry.set(cbId, callback);
+    if (!objectEventMap.has(targetRef)) objectEventMap.set(targetRef, new Map());
+    objectEventMap.get(targetRef)!.set(cbId, { callback, eventName });
+    ipc.send({ action: 'AddDeferredEvent', targetId: targetRef, eventName, callbackId: cbId } as any);
+}
+
 // Cleans up all JS-side state for a released object id.
 // Called both from FinalizationRegistry and from releaseObject().
 function cleanupObjectById(id: string, isExplicitRelease: boolean = false): void {
@@ -73,7 +109,26 @@ export function dispatchPollEvents(events: string[]): void {
                     if (arg && arg.type === 'ref' && arg.props) return createProxyWithInlineProps(arg);
                     return createProxy(arg);
                 });
-                try { cb(...wrappedArgs, evt.error || null); } catch {}
+
+                if (evt.type === 'deferredEvent' && evt.deferralId) {
+                    // Deferred event: call callback, send return value as CompleteDeferral
+                    let result: any = null;
+                    try { result = cb(...wrappedArgs); } catch (e) {
+                        console.error('[DeferredEvent] callback error:', (e as any).message);
+                    }
+                    try {
+                        const ipc = getIpc();
+                        const cmd: any = { action: 'CompleteDeferral', deferralId: evt.deferralId };
+                        if (result !== null && result !== undefined && typeof result === 'object') {
+                            Object.assign(cmd, result);
+                        }
+                        ipc!.send(cmd);
+                    } catch (e) {
+                        console.error('[DeferredEvent] CompleteDeferral error:', (e as any).message);
+                    }
+                } else {
+                    try { cb(...wrappedArgs, evt.error || null); } catch {}
+                }
             }
         } catch {}
     }

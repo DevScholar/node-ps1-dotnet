@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { getPowerShellPath } from './utils.js';
 import { IpcSync } from './ipc.js';
 import { getIpc, setIpc, getProc, setProc, getInitialized, setInitialized, getCachedRuntimeInfo, setCachedRuntimeInfo } from './state.js';
-import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet, releaseObject, dispatchPollEvents } from './proxy.js';
-export { releaseObject, callbackRegistry, createProxy, createProxyWithInlineProps };
+import { callbackRegistry, createProxyWithInlineProps, createProxy, setNodePs1Dotnet, releaseObject, dispatchPollEvents, addAsyncEvent, addDeferredEvent } from './proxy.js';
+export { releaseObject, callbackRegistry, createProxy, createProxyWithInlineProps, addAsyncEvent, addDeferredEvent };
 import { createNamespaceProxy, createExportNamespaceProxy } from './namespace.js';
 
 export const __filename = fileURLToPath(import.meta.url);
@@ -305,6 +305,18 @@ const dotnetProxy = new Proxy(function() {} as any, {
         // Registers a bridge script and navigates atomically: C# awaits the
         // AddScriptToExecuteOnDocumentCreatedAsync Task via ContinueWith before
         // calling Navigate, preventing the race condition in polling mode.
+        if (prop === 'addAsyncEvent') {
+            return (target: any, eventName: string, callback: Function) => {
+                doInitialize();
+                addAsyncEvent(target.__ref, eventName, callback);
+            };
+        }
+        if (prop === 'addDeferredEvent') {
+            return (target: any, eventName: string, callback: Function) => {
+                doInitialize();
+                addDeferredEvent(target.__ref, eventName, callback);
+            };
+        }
         if (prop === 'addScriptAndNavigate') {
             return (coreWebView2: any, script: string, url: string) => {
                 doInitialize();

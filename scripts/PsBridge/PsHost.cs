@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
+using System.Reflection;
 using System.Threading;
 using System.Web.Script.Serialization;
 
@@ -15,14 +16,88 @@ public static class PsHost
     public static BlockingCollection<Dictionary<string, object>> ReplyQueue = new BlockingCollection<Dictionary<string, object>>();
     public static SynchronizationContext MainSyncContext { get; set; }
 
+    // Cached WPF Dispatcher reflection — lazily initialised by EnsureDispatcherReflection().
+    private static bool _dispatcherReflectionChecked;
+    private static MethodInfo _pushFrameMethod;   // Dispatcher.PushFrame(DispatcherFrame)
+    private static Type _frameType;               // System.Windows.Threading.DispatcherFrame
+    private static PropertyInfo _frameContinueProp; // DispatcherFrame.Continue
+    private static PropertyInfo _currentDispatcherProp; // Dispatcher.CurrentDispatcher
+    private static MethodInfo _beginInvokeMethod;  // Dispatcher.BeginInvoke(DispatcherPriority, Delegate)
+    private static object _backgroundPriority;     // DispatcherPriority.Background
+
+    private static void EnsureDispatcherReflection()
+    {
+        if (_dispatcherReflectionChecked) return;
+        _dispatcherReflectionChecked = true;
+
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (asm.GetName().Name != "WindowsBase") continue;
+            var dispType = asm.GetType("System.Windows.Threading.Dispatcher");
+            var fType = asm.GetType("System.Windows.Threading.DispatcherFrame");
+            var priorityType = asm.GetType("System.Windows.Threading.DispatcherPriority");
+            if (dispType == null || fType == null || priorityType == null) break;
+
+            _frameType = fType;
+            _frameContinueProp = _frameType.GetProperty("Continue");
+            _currentDispatcherProp = dispType.GetProperty("CurrentDispatcher", BindingFlags.Public | BindingFlags.Static);
+            _pushFrameMethod = dispType.GetMethod("PushFrame", BindingFlags.Public | BindingFlags.Static, null, new Type[] { _frameType }, null);
+            _beginInvokeMethod = dispType.GetMethod("BeginInvoke", new Type[] { priorityType, typeof(Delegate) });
+            _backgroundPriority = Enum.Parse(priorityType, "Background");
+            break;
+        }
+    }
+
+    /// <summary>
+    /// Process all pending WPF Dispatcher messages (DoEvents pattern).
+    /// Pushes a DispatcherFrame that pumps Normal-priority and above messages,
+    /// then exits when the Background-priority callback fires.
+    /// </summary>
+    private static void PumpDispatcherMessages()
+    {
+        if (_pushFrameMethod == null) return;
+
+        var frame = Activator.CreateInstance(_frameType);
+        var dispatcher = _currentDispatcherProp.GetValue(null, null);
+        if (dispatcher == null) return;
+
+        Action exitAction = delegate { _frameContinueProp.SetValue(frame, false, null); };
+        _beginInvokeMethod.Invoke(dispatcher, new object[] { _backgroundPriority, exitAction });
+        _pushFrameMethod.Invoke(null, new object[] { frame });
+    }
+
     public static object RunProcessNestedCommands()
     {
+        EnsureDispatcherReflection();
+        bool hasDispatcher = (_pushFrameMethod != null);
+
         var queues = new BlockingCollection<Dictionary<string, object>>[] { ReplyQueue, CommandQueue };
 
         while (BridgeState.PipeServer != null && BridgeState.PipeServer.IsConnected)
         {
             Dictionary<string, object> item;
-            int index = BlockingCollection<Dictionary<string, object>>.TakeFromAny(queues, out item);
+            int index;
+
+            if (hasDispatcher)
+            {
+                // WPF mode: pump Dispatcher messages (allows WebResourceRequested to fire),
+                // then do a non-blocking check on the queues.
+                PumpDispatcherMessages();
+                index = BlockingCollection<Dictionary<string, object>>.TryTakeFromAny(queues, out item, 0);
+                if (index < 0)
+                {
+                    // Thread.Sleep(0) yields to equal-priority threads without sleeping
+                    // a full timer tick (~15ms). PumpDispatcherMessages() already provides
+                    // work per iteration, so true tight-spinning does not occur.
+                    Thread.Sleep(0);
+                    continue;
+                }
+            }
+            else
+            {
+                // Non-WPF (WinForms / console): original blocking wait.
+                index = BlockingCollection<Dictionary<string, object>>.TakeFromAny(queues, out item);
+            }
 
             if (index == 0)
             {
