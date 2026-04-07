@@ -37,6 +37,7 @@
  */
 
 import dotnet from './index.js';
+import { addType } from './internal.js';
 
 // ── Metadata types ─────────────────────────────────────────────────────────────
 
@@ -301,7 +302,7 @@ export function compilePInvoke(targets: (abstract new (...args: any[]) => any)[]
     }
 
     // Compile via Add-Type (C# 5.0 compatible — no auto-property initializers etc.)
-    (dotnet as any).addType(lines.join('\n'));
+    addType(lines.join('\n'));
 
     // Obtain a node-ps1-dotnet proxy for the compiled static class
     const cls = (dotnet as any)[className];

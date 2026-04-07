@@ -158,6 +158,18 @@ function doInitialize() {
     startPolling();
 }
 
+export function addType(source: string, references?: string[]): any {
+    doInitialize();
+    const ipc = getIpc();
+    const cmd: any = { action: 'AddType', source };
+    if (references && references.length > 0) cmd.references = references;
+    const res = ipc!.send(cmd);
+    if (res && (res as any).type === 'error') {
+        throw new Error('AddType failed: ' + (res as any).message);
+    }
+    return createProxy(res);
+}
+
 export const node_ps1_dotnet = {
     _load(typeName: string): any {
         doInitialize();
@@ -215,15 +227,7 @@ export const node_ps1_dotnet = {
     },
 
     _addType(source: string, references?: string[]): any {
-        doInitialize();
-        const ipc = getIpc();
-        const cmd: any = { action: 'AddType', source };
-        if (references && references.length > 0) cmd.references = references;
-        const res = ipc!.send(cmd);
-        if (res && (res as any).type === 'error') {
-            throw new Error('AddType failed: ' + (res as any).message);
-        }
-        return createProxy(res);
+        return addType(source, references);
     },
 
     _awaitTask(task: any): Promise<any> {
@@ -274,12 +278,6 @@ const dotnetProxy = new Proxy(function() {} as any, {
         }
         if (prop === 'runtimeVersion') {
             return node_ps1_dotnet._getRuntimeInfo().runtimeVersion;
-        }
-        if (prop === 'addType') {
-            return (source: string, references?: string[]) => {
-                doInitialize();
-                return node_ps1_dotnet._addType(source, references);
-            };
         }
         if (prop === 'awaitTask') {
             return (task: any) => node_ps1_dotnet._awaitTask(task);
