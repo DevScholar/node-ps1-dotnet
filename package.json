@@ -13,6 +13,14 @@
     ".": {
       "types": "./types/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./pinvoke": {
+      "types": "./types/pinvoke.d.ts",
+      "default": "./dist/pinvoke.js"
+    },
+    "./internal": {
+      "types": "./types/internal.d.ts",
+      "default": "./dist/internal.js"
     }
   },
   "types": "./types/index.d.ts",
