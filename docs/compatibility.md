@@ -19,6 +19,19 @@ This document describes the API compatibility between `node-ps1-dotnet` and Micr
 
 ---
 
+## API Stability
+
+APIs are divided into two tiers:
+
+| Tier | APIs | Stability |
+|------|------|-----------|
+| **Compatible** (mirrors node-api-dotnet) | `dotnet.load()`, type/namespace access, `new`, method/property calls, `frameworkMoniker`, `runtimeVersion`, `resolving` listener | Stable — changes track node-api-dotnet's own API |
+| **Proprietary extensions** (unique to this project) | `add_*` / `remove_*` events, `startApplication()`, `typeConversionBehavior`, `addType()`, Stream marshalling, P/Invoke decorators | **No stability guarantee** — may change between versions |
+
+Proprietary extension APIs exist because node-api-dotnet has not yet implemented those features. When node-api-dotnet adds equivalent support, this project's API may be revised to match.
+
+---
+
 ## Type Conversion Reference
 
 The table below shows how each .NET type is marshalled to JavaScript.
@@ -134,6 +147,105 @@ All `add_*` handlers are synchronous: the .NET event handler thread blocks until
 ```typescript
 dotnet.startApplication(app, window);   // Start WPF message loop (non-blocking)
 ```
+
+### P/Invoke (Win32 Native Bindings)
+
+**Import path:** `@devscholar/node-ps1-dotnet/pinvoke`
+
+Declare Win32 P/Invoke bindings using TC39 Stage 3 decorators. No extra `tsconfig` flags are required beyond what TypeScript already supports.
+
+#### Quick example
+
+```typescript
+import { Struct, Field, DllImport, compilePInvoke }
+    from '@devscholar/node-ps1-dotnet/pinvoke';
+
+@Struct()
+class FLASHWINFO {
+    @Field('uint')   cbSize    = 0;
+    @Field('IntPtr') hwnd      = 0n;
+    @Field('uint')   dwFlags   = 0;
+    @Field('uint')   uCount    = 0;
+    @Field('uint')   dwTimeout = 0;
+}
+
+class User32 {
+    @DllImport('user32.dll', {
+        setLastError: true,
+        returns: 'bool',
+        params:  ['ref FLASHWINFO'],
+    })
+    static FlashWindowEx(pwfi: FLASHWINFO): boolean { return false; }
+
+    @DllImport('user32.dll', {
+        returns: 'int',
+        params:  ['IntPtr', 'int'],
+    })
+    static GetWindowLong(hWnd: bigint, nIndex: number): number { return 0; }
+}
+
+// Compile once, before any P/Invoke method is called
+compilePInvoke([FLASHWINFO, User32]);
+
+// Use like ordinary static methods
+User32.FlashWindowEx({ cbSize: 20, hwnd: handle, dwFlags: 3, uCount: 5, dwTimeout: 0 });
+const style = User32.GetWindowLong(handle, -16);
+```
+
+#### `@Struct(options?)`
+
+Marks a TypeScript class as a C# struct. Every instance field that should appear in the struct layout must be annotated with `@Field`.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `layout` | `'Sequential' \| 'Explicit' \| 'Auto'` | `'Sequential'` | `StructLayout` kind |
+| `charset` | `'Auto' \| 'Unicode' \| 'Ansi'` | — | `CharSet` for the struct |
+| `name` | `string` | class name | Override the generated C# struct name |
+
+#### `@Field(csType)`
+
+Declares the C# type of a struct field. Must be applied to every field that appears in the struct layout.
+
+```typescript
+@Field('uint')    count = 0;
+@Field('IntPtr')  handle = 0n;   // bigint in JS
+@Field('bool')    enabled = false;
+@Field('ushort')  wChar = 0;
+```
+
+`csType` is any valid C# value type that can appear in a `StructLayout` struct: primitives (`int`, `uint`, `bool`, …), `IntPtr`, `char`, `ushort`, etc.
+
+#### `@DllImport(dll, options)`
+
+Declares a **static** method as a P/Invoke binding. The method body is replaced by `compilePInvoke()` at runtime.
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `returns` | `string` | **Yes** | C# return type (`'void'`, `'int'`, `'bool'`, `'IntPtr'`, …) |
+| `params` | `string[]` | No | C# parameter types in declaration order; prefix with `'ref '` for by-reference parameters |
+| `entryPoint` | `string` | No | Override the native entry-point name (default: method name) |
+| `charSet` | `'Auto' \| 'Unicode' \| 'Ansi'` | No | CharSet for string marshaling |
+| `setLastError` | `boolean` | No | Sets `SetLastError = true` on the `DllImport` attribute |
+| `preserveSig` | `boolean` | No | Sets `PreserveSig = false` when `false` |
+
+#### `compilePInvoke(targets)`
+
+Compiles all `@Struct` and `@DllImport` declarations in `targets` into a single `Add-Type` call, then patches the static methods on each class to route through the compiled C# code.
+
+- Call **once**, after all decorated classes are defined and before any P/Invoke method is invoked.
+- Subsequent calls with the same targets are **no-ops**.
+- `targets` may contain any mix of `@Struct`-only classes, `@DllImport`-only classes, or both.
+
+#### `ref` struct parameters
+
+When a parameter is declared as `'ref StructType'` in `params`, the struct's fields are flattened into individual C# wrapper arguments to avoid complex marshaling. The JS caller passes a plain object with the struct's field names:
+
+```typescript
+// params: ['ref FLASHWINFO'] → JS passes a plain object
+User32.FlashWindowEx({ cbSize: 20, hwnd: handle, dwFlags: 3, uCount: 5, dwTimeout: 0 });
+```
+
+> **Note**: Mutations made by the P/Invoke to the struct are **not** reflected back to the JS object. Parameters declared as `'ref StructType'` have input-only semantics from JS's perspective.
 
 ---
 

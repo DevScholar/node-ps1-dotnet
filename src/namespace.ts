@@ -19,7 +19,17 @@ export function createNamespaceProxy(assemblyName: string, dotnet: any) {
             } catch {}
             
             if (typeId) {
-                return new Proxy({}, {
+                return new Proxy(function() {} as any, {
+                    construct: (_target2: any, args: any[]) => {
+                        const ipc = getIpc();
+                        if (!ipc) throw new Error('IPC not initialized');
+                        const netArgs = args.map((a: any) => {
+                            if (a && a.__ref) return { __ref: a.__ref };
+                            return a;
+                        });
+                        const res = ipc.send({ action: 'New', typeId: typeId, args: netArgs });
+                        return createProxy(res);
+                    },
                     get: (target2: any, prop2: string) => {
                         if (typeof prop2 !== 'string') return undefined;
                         

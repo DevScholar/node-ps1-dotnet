@@ -341,7 +341,7 @@ const dotnetProxy = new Proxy(function() {} as any, {
         }
         return node_ps1_dotnet._load(prop);
     },
-    apply: (target: any, argArray: any[], newTarget: any) => {
+    apply: (_target: any, _thisArg: any, argArray: any[]) => {
         return createNamespaceProxy(argArray[0], node_ps1_dotnet);
     },
     set: (_target: any, prop: string, value: any) => {

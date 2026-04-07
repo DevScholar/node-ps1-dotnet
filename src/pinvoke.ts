@@ -203,7 +203,9 @@ function genMethodCs(m: MethodMeta, structMap: Map<string, StructMeta>): string 
     // Build DllImport attribute extras
     const extras: string[] = [];
     if (m.setLastError)          extras.push('SetLastError = true');
-    if (m.entryPoint)            extras.push(`EntryPoint = "${m.entryPoint}"`);
+    // Always set EntryPoint: the extern is named _extern_X to avoid colliding
+    // with the public wrapper, so DllImport must know the real entry-point name.
+    extras.push(`EntryPoint = "${m.entryPoint || m.methodName}"`);
     if (m.charSet)               extras.push(`CharSet = CharSet.${m.charSet}`);
     if (m.preserveSig === false)  extras.push('PreserveSig = false');
     const extraStr = extras.length ? ', ' + extras.join(', ') : '';
