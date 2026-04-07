@@ -26,7 +26,7 @@ APIs are divided into two tiers:
 | Tier | APIs | Stability |
 |------|------|-----------|
 | **Compatible** (mirrors node-api-dotnet) | `dotnet.load()`, type/namespace access, `new`, method/property calls, `frameworkMoniker`, `runtimeVersion`, `resolving` listener | Stable — changes track node-api-dotnet's own API |
-| **Proprietary extensions** (unique to this project) | `add_*` / `remove_*` events, `startApplication()`, `typeConversionBehavior`, `addType()`, Stream marshalling, P/Invoke decorators | **No stability guarantee** — may change between versions |
+| **Proprietary extensions** (unique to this project) | `add_*` / `remove_*` events, `typeConversionBehavior`, `addType()`, Stream marshalling, P/Invoke decorators | **No stability guarantee** — may change between versions |
 
 Proprietary extension APIs exist because node-api-dotnet has not yet implemented those features. When node-api-dotnet adds equivalent support, this project's API may be revised to match.
 
@@ -141,12 +141,6 @@ btn.remove_Click(handler);
 ```
 
 All `add_*` handlers are synchronous: the .NET event handler thread blocks until the JS callback returns. The return value is forwarded back to .NET, so patterns like `e.Cancel = true` or returning a response object work without any special API variant. Nested IPC calls inside the callback are also supported.
-
-### WPF/WinForms Application Loop
-
-```typescript
-dotnet.startApplication(app, window);   // Start WPF message loop (non-blocking)
-```
 
 ### P/Invoke (Win32 Native Bindings)
 

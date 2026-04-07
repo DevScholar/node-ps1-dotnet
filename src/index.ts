@@ -329,13 +329,6 @@ const dotnetProxy = new Proxy(function() {} as any, {
                 getIpc()!.send({ action: 'AddScriptAndNavigateToString', targetId: coreWebView2.__ref, script, html });
             };
         }
-        // Polling-mode helpers used by node-with-window on Windows
-        if (prop === 'startApplication') {
-            return (app: any, window: any) => {
-                doInitialize();
-                getIpc()!.send({ action: 'InvokeDetached', targetId: app.__ref, methodName: 'Run', args: [{ __ref: window.__ref }] });
-            };
-        }
         if (prop === 'pollEvent') {
             return () => false;
         }
@@ -371,3 +364,9 @@ export const System = new Proxy({} as any, {
         return getSystem()[prop];
     }
 });
+
+/** @internal Used by node-with-window's WPF backend. Not part of the public API. */
+export function startApplication(app: any, window: any): void {
+    doInitialize();
+    getIpc()!.send({ action: 'InvokeDetached', targetId: app.__ref, methodName: 'Run', args: [{ __ref: window.__ref }] });
+}
