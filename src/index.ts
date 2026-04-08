@@ -13,6 +13,7 @@ export const __filename = fileURLToPath(import.meta.url);
 export const __dirname = path.dirname(__filename);
 
 let stopPolling: (() => void) | null = null;
+const resolvingListeners: Function[] = [];
 let initializingPromise: Promise<void> | null = null;
 let _typeConversionBehavior: 'node-api-dotnet' | 'pythonnet' = 'node-api-dotnet';
 
@@ -139,6 +140,13 @@ function doInitialize() {
     });
 
     const ipc = new IpcSync(pipeName, (res: any) => {
+        if (res.callbackId === '__resolving__') {
+            for (const fn of resolvingListeners) {
+                const result = fn(...(res.args || []));
+                if (result != null) return result;
+            }
+            return null;
+        }
         const cb = callbackRegistry.get(res.callbackId!);
         if (cb) {
             const wrappedArgs = (res.args || []).map((arg: any) => {
@@ -284,10 +292,11 @@ const dotnetProxy = new Proxy(function() {} as any, {
         }
         if (prop === 'addListener') return (event: string, fn: Function) => {
             if (event === 'resolving') {
-                const cbId = '__resolving__';
-                callbackRegistry.set(cbId, fn);
-                doInitialize();
-                getIpc()!.send({ action: 'SetResolvingCallback', callbackId: cbId });
+                resolvingListeners.push(fn);
+                if (resolvingListeners.length === 1) {
+                    doInitialize();
+                    getIpc()!.send({ action: 'SetResolvingCallback', callbackId: '__resolving__' });
+                }
             }
         };
         if (prop === '__inspect') {
