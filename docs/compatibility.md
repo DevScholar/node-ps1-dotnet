@@ -120,7 +120,7 @@ dotnet.addListener('resolving', (name: string) => {
 });
 ```
 
-> **Note**: The current implementation only supports one `resolving` listener; later registrations override previous ones.
+> **Note**: Multiple `resolving` listeners are supported. They are called in registration order; the first to return a non-null path wins.
 
 ---
 
@@ -247,7 +247,7 @@ User32.FlashWindowEx({ cbSize: 20, hwnd: handle, dwFlags: 3, uCount: 5, dwTimeou
 
 | Feature | Description |
 |---------|-------------|
-| Multiple `resolving` listeners | node-api-dotnet supports chained listeners; this project supports one |
+| Multiple `resolving` listeners | node-api-dotnet supports chained listeners; this project now also supports them |
 | `import` static types (TypeScript) | node-api-dotnet generates `.d.ts` via `.nupkg`; this project uses dynamic `Proxy` |
 | macOS / Linux | node-api-dotnet is cross-platform; this project is Windows only |
 | `Task<T>` native async/await | Wrapped as `Promise` via poll-based IPC; same semantics, additional round-trip overhead |
