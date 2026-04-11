@@ -238,6 +238,58 @@ public static class Protocol
             return new Dictionary<string, object> { { "type", "map" }, { "entries", entries } };
         }
 
+        // Common geometry structs → plain JS objects (avoid ref proxy + IPC round-trips for X/Y/Width/Height).
+        // Covers WPF (System.Windows.*) and WinForms/GDI+ (System.Drawing.*) types.
+        {
+            var fn = inputObject.GetType().FullName;
+            if (fn == "System.Windows.Point" || fn == "System.Drawing.PointF")
+            {
+                var x = inputObject.GetType().GetProperty("X").GetValue(inputObject, null);
+                var y = inputObject.GetType().GetProperty("Y").GetValue(inputObject, null);
+                var obj = new Dictionary<string, object> { { "X", x }, { "Y", y } };
+                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
+            }
+            if (fn == "System.Drawing.Point")
+            {
+                var x = inputObject.GetType().GetProperty("X").GetValue(inputObject, null);
+                var y = inputObject.GetType().GetProperty("Y").GetValue(inputObject, null);
+                var obj = new Dictionary<string, object> { { "X", x }, { "Y", y } };
+                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
+            }
+            if (fn == "System.Windows.Size" || fn == "System.Drawing.SizeF")
+            {
+                var w = inputObject.GetType().GetProperty("Width").GetValue(inputObject, null);
+                var h = inputObject.GetType().GetProperty("Height").GetValue(inputObject, null);
+                var obj = new Dictionary<string, object> { { "Width", w }, { "Height", h } };
+                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
+            }
+            if (fn == "System.Drawing.Size")
+            {
+                var w = inputObject.GetType().GetProperty("Width").GetValue(inputObject, null);
+                var h = inputObject.GetType().GetProperty("Height").GetValue(inputObject, null);
+                var obj = new Dictionary<string, object> { { "Width", w }, { "Height", h } };
+                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
+            }
+            if (fn == "System.Windows.Rect" || fn == "System.Drawing.RectangleF")
+            {
+                var x = inputObject.GetType().GetProperty("X").GetValue(inputObject, null);
+                var y = inputObject.GetType().GetProperty("Y").GetValue(inputObject, null);
+                var w = inputObject.GetType().GetProperty("Width").GetValue(inputObject, null);
+                var h = inputObject.GetType().GetProperty("Height").GetValue(inputObject, null);
+                var obj = new Dictionary<string, object> { { "X", x }, { "Y", y }, { "Width", w }, { "Height", h } };
+                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
+            }
+            if (fn == "System.Drawing.Rectangle")
+            {
+                var x = inputObject.GetType().GetProperty("X").GetValue(inputObject, null);
+                var y = inputObject.GetType().GetProperty("Y").GetValue(inputObject, null);
+                var w = inputObject.GetType().GetProperty("Width").GetValue(inputObject, null);
+                var h = inputObject.GetType().GetProperty("Height").GetValue(inputObject, null);
+                var obj = new Dictionary<string, object> { { "X", x }, { "Y", y }, { "Width", w }, { "Height", h } };
+                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
+            }
+        }
+
         var objRefId = Guid.NewGuid().ToString();
         BridgeState.ObjectStore[objRefId] = inputObject;
 

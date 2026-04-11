@@ -440,11 +440,30 @@ public static partial class Reflection
         BridgeState.EventQueue.Enqueue(msg);
     }
 
+    // Guard against re-entrant sync events. When RunProcessNestedCommands pumps
+    // the WPF dispatcher (PumpDispatcherMessages), it can fire new events (e.g.
+    // MouseMove) on the same thread. If those also use FireSyncEventAndWait, the
+    // inner event's syncEvent is written to the pipe before the outer event's
+    // nested IPC calls are answered, causing response ordering mixup on the
+    // Node.js side (the inner callback reads responses meant for the outer one).
+    // Fix: if already inside a sync event, fall back to async (EventQueue → Poll).
+    private static int _syncEventDepth = 0;
+
     // Fire a sync event to Node.js and block until the JS handler returns a value.
     // C# is suspended in RunProcessNestedCommands(), processing any proxy calls the
     // JS handler makes, until Node.js sends back {type:'reply', result:...}.
     private static object FireSyncEventAndWait(string cbId, object[] args)
     {
+        if (_syncEventDepth > 0)
+        {
+            // Re-entrant: convert to async to avoid response ordering corruption.
+            // The callback will run during the next Poll cycle (~8ms latency).
+            FireAsyncEvent(cbId, args);
+            return null;
+        }
+        _syncEventDepth++;
+        try
+        {
         var protoArgs = new List<Dictionary<string, object>>();
         foreach (var arg in args)
         {
@@ -572,6 +591,11 @@ public static partial class Reflection
         }
 
         return result;
+        }
+        finally
+        {
+            _syncEventDepth--;
+        }
     }
 
 }
