@@ -19,6 +19,21 @@ public static partial class Reflection
         };
     }
 
+    private static Dictionary<string, object> HandleCreateCOMObject(Dictionary<string, object> cmd)
+    {
+        var progId = cmd["progId"].ToString();
+        try
+        {
+            var type = Type.GetTypeFromProgID(progId, true);
+            var obj = Activator.CreateInstance(type);
+            return Protocol.ConvertToProtocol(obj);
+        }
+        catch (Exception ex)
+        {
+            throw new Exception("CreateCOMObject Error: " + ex.Message);
+        }
+    }
+
     private static Dictionary<string, object> HandleNew(Dictionary<string, object> cmd)
     {
         var type = (Type)BridgeState.ObjectStore[cmd["typeId"].ToString()];

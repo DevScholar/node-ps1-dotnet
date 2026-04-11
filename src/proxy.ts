@@ -189,8 +189,13 @@ export function ensureMemberTypeCached(id: string, memberName: string, memberCac
     if (typeName) {
         const members = getTypeMembers(typeName, [memberName]);
         if (members && members.has(memberName)) {
-            memberCache.set(memberName, members.get(memberName)!);
-            return;
+            const mtype = members.get(memberName)!;
+            // "unknown" means reflection couldn't determine the member type
+            // (e.g. COM __ComObject). Fall through to per-instance Inspect.
+            if (mtype !== 'unknown') {
+                memberCache.set(memberName, mtype);
+                return;
+            }
         }
     }
 
@@ -597,7 +602,30 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
             return createProxy(res);
         },
 
-        apply: () => { throw new Error("Cannot call .NET object as a function. Need 'new'?"); }
+        apply: () => { throw new Error("Cannot call .NET object as a function. Need 'new'?"); },
+
+        // Enable for..in on enumerable collections by exposing numeric string indices.
+        ownKeys: () => {
+            if (_enumToArr !== null) {
+                const items = _enumToArr();
+                return Array.from({ length: items.length }, (_, i) => String(i));
+            }
+            if (_listIter !== null) {
+                const items = _listToArr!();
+                return Array.from({ length: items.length }, (_, i) => String(i));
+            }
+            return [];
+        },
+
+        getOwnPropertyDescriptor: (_target: any, prop: string | symbol) => {
+            if (typeof prop === 'string' && (_enumToArr !== null || _listIter !== null)) {
+                const idx = Number(prop);
+                if (!isNaN(idx) && idx >= 0 && String(idx) === prop) {
+                    return { configurable: true, enumerable: true, writable: false, value: undefined };
+                }
+            }
+            return undefined;
+        }
     });
 
     gcRegistry.register(proxy, id);

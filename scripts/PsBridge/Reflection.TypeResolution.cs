@@ -55,7 +55,27 @@ public static partial class Reflection
             }
         }
 
-        var members = target.GetType().GetMember(memberName);
+        var targetType = target.GetType();
+
+        // COM objects: standard reflection returns nothing for __ComObject members.
+        // Probe with GetProperty to distinguish properties from methods:
+        // - GetProperty succeeds → treat as property (proxy eagerly fetches value)
+        // - GetProperty fails   → needs arguments, treat as method (proxy returns callable)
+        if (targetType.IsCOMObject)
+        {
+            try
+            {
+                targetType.InvokeMember(memberName,
+                    BindingFlags.GetProperty, null, target, null);
+                return new Dictionary<string, object> { { "type", "meta" }, { "memberType", "property" } };
+            }
+            catch
+            {
+                return new Dictionary<string, object> { { "type", "meta" }, { "memberType", "method" } };
+            }
+        }
+
+        var members = targetType.GetMember(memberName);
         if (members != null && members.Length > 0)
         {
             var member = members[0];

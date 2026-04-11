@@ -1,5 +1,6 @@
 // scripts/PsBridge/Reflection.Collections.cs
 using System.Collections.Generic;
+using System.Reflection;
 
 public static partial class Reflection
 {
@@ -32,17 +33,45 @@ public static partial class Reflection
     private static Dictionary<string, object> HandleMaterializeEnum(Dictionary<string, object> cmd)
     {
         var target = BridgeState.ObjectStore[cmd["targetId"].ToString()];
-        var enumerable = target as System.Collections.IEnumerable;
-        if (enumerable == null)
-            throw new System.Exception("MaterializeEnum: target is not IEnumerable");
-
         var result = new List<Dictionary<string, object>>();
-        foreach (var item in enumerable)
+
+        var enumerable = target as System.Collections.IEnumerable;
+        if (enumerable != null)
         {
-            result.Add(item == null
-                ? new Dictionary<string, object> { { "type", "null" } }
-                : Protocol.ConvertToProtocol(item));
+            foreach (var item in enumerable)
+            {
+                result.Add(item == null
+                    ? new Dictionary<string, object> { { "type", "null" } }
+                    : Protocol.ConvertToProtocol(item));
+            }
+            return new Dictionary<string, object> { { "type", "array" }, { "value", result } };
         }
-        return new Dictionary<string, object> { { "type", "array" }, { "value", result } };
+
+        // COM fallback: late-bound COM objects may not cast to IEnumerable,
+        // but expose _NewEnum via IDispatch which returns IEnumerator.
+        if (target.GetType().IsCOMObject)
+        {
+            try
+            {
+                var newEnum = target.GetType().InvokeMember("_NewEnum",
+                    BindingFlags.InvokeMethod | BindingFlags.GetProperty,
+                    null, target, null);
+                var enumerator = newEnum as System.Collections.IEnumerator;
+                if (enumerator != null)
+                {
+                    while (enumerator.MoveNext())
+                    {
+                        var item = enumerator.Current;
+                        result.Add(item == null
+                            ? new Dictionary<string, object> { { "type", "null" } }
+                            : Protocol.ConvertToProtocol(item));
+                    }
+                    return new Dictionary<string, object> { { "type", "array" }, { "value", result } };
+                }
+            }
+            catch { }
+        }
+
+        throw new System.Exception("MaterializeEnum: target is not IEnumerable");
     }
 }

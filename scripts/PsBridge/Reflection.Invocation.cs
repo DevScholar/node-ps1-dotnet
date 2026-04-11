@@ -480,6 +480,43 @@ public static partial class Reflection
                 }
             }
 
+            // COM late-binding fallback: standard reflection does not work on __ComObject.
+            // Use Type.InvokeMember which delegates to IDispatch internally.
+            if (!manualSuccess && !isStatic && targetType.IsCOMObject)
+            {
+                if (realArgs.Length == 0)
+                {
+                    // No args: property get (may also be a parameterless method)
+                    result = targetType.InvokeMember(name,
+                        BindingFlags.GetProperty | BindingFlags.InvokeMethod,
+                        null, target, null);
+                }
+                else if (realArgs.Length == 1)
+                {
+                    // Single arg: could be property set or method call
+                    try
+                    {
+                        result = targetType.InvokeMember(name,
+                            BindingFlags.InvokeMethod,
+                            null, target, realArgs);
+                    }
+                    catch
+                    {
+                        targetType.InvokeMember(name,
+                            BindingFlags.SetProperty,
+                            null, target, realArgs);
+                        return new Dictionary<string, object> { { "type", "void" } };
+                    }
+                }
+                else
+                {
+                    result = targetType.InvokeMember(name,
+                        BindingFlags.InvokeMethod,
+                        null, target, realArgs);
+                }
+                return Protocol.ConvertToProtocol(result);
+            }
+
             return Protocol.ConvertToProtocol(result);
         }
         catch (Exception ex)

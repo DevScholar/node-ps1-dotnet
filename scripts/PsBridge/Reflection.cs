@@ -21,6 +21,7 @@ public static partial class Reflection
             case "AddDeferredEvent":      return HandleAddDeferredEvent(cmd);
             case "CompleteDeferral":      return HandleCompleteDeferral(cmd);
             case "New":                   return HandleNew(cmd);
+            case "CreateCOMObject":       return HandleCreateCOMObject(cmd);
             case "Invoke":                return HandleInvoke(cmd);
             case "AwaitTask":             return HandleAwaitTask(cmd);
             case "LoadAssembly":          return HandleLoadAssembly(cmd);

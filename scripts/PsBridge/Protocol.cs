@@ -273,6 +273,27 @@ public static class Protocol
             if (m.Name == "get_Item") { refResult["hasIndexer"] = true; break; }
         }
 
+        // COM collections: detect IEnumerable support so JS proxy attaches Symbol.iterator.
+        if (inputObject.GetType().IsCOMObject)
+        {
+            if (inputObject is System.Collections.IEnumerable)
+            {
+                refResult["collectionKind"] = "enumerable";
+            }
+            else
+            {
+                // Late-bound COM: try _NewEnum via IDispatch
+                try
+                {
+                    inputObject.GetType().InvokeMember("_NewEnum",
+                        BindingFlags.InvokeMethod | BindingFlags.GetProperty,
+                        null, inputObject, null);
+                    refResult["collectionKind"] = "enumerable";
+                }
+                catch { }
+            }
+        }
+
         return refResult;
     }
 

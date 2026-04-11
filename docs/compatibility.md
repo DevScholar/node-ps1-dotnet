@@ -142,6 +142,64 @@ btn.remove_Click(handler);
 
 All `add_*` handlers are synchronous: the .NET event handler thread blocks until the JS callback returns. The return value is forwarded back to .NET, so patterns like `e.Cancel = true` or returning a response object work without any special API variant. Nested IPC calls inside the callback are also supported.
 
+### COM / ActiveX Objects (winax Alternative)
+
+**Import path:** `@devscholar/node-ps1-dotnet/activex`
+
+Creates COM objects by ProgID, mimicking the WSH/IE `ActiveXObject` constructor. This serves as a drop-in replacement for the [`winax`](https://www.npmjs.com/package/winax) npm package in environments where `node-gyp` (required by `winax`) is unavailable or difficult to set up.
+
+#### Quick example
+
+```typescript
+import { ActiveXObject } from '@devscholar/node-ps1-dotnet/activex';
+
+const fso = new ActiveXObject('Scripting.FileSystemObject');
+console.log(fso.FileExists('package.json'));   // true
+
+const shell = new ActiveXObject('WScript.Shell');
+shell.Run('notepad.exe');
+```
+
+#### How it works
+
+`ActiveXObject(progId)` sends a `CreateCOMObject` command to the PowerShell/.NET bridge, which uses `Type.GetTypeFromProgID` + `Activator.CreateInstance` to instantiate the COM object. The returned object is a live ref proxy — property reads, method calls, and property writes are all forwarded to the real COM object via IPC late binding (`Type.InvokeMember` with `IDispatch`).
+
+Works as both a regular function call and a `new` expression:
+
+```typescript
+const shell = new ActiveXObject('WScript.Shell');   // new expression
+const fso   = ActiveXObject('Scripting.FileSystemObject');  // function call
+```
+
+#### Comparison with winax
+
+| Feature | winax | node-ps1-dotnet/activex |
+|---------|-------|------------------------|
+| Build requirement | node-gyp + Python + MSVC | None (pure JS + PowerShell) |
+| COM invocation | In-process (N-API) | Out-of-process (IPC) |
+| Performance | High | Medium (IPC round-trip per call) |
+| Returned objects | Live COM proxies | Live ref proxies (late-bound) |
+| Event support | Limited | Via `add_*` / `remove_*` pattern |
+
+#### Use with VBScript engines
+
+The `ActiveXObject` export is designed to work as a host-global for VBScript engines like [`@devscholar/vbs-engine-js`](https://www.npmjs.com/package/@devscholar/vbs-engine-js). Assign it to `globalThis.ActiveXObject` before creating the engine, and `CreateObject("ProgID")` in VBScript will use it automatically:
+
+```typescript
+import { VbsEngine } from '@devscholar/vbs-engine-js';
+import { ActiveXObject } from '@devscholar/node-ps1-dotnet/activex';
+
+(globalThis as any).ActiveXObject = ActiveXObject;
+
+const engine = new VbsEngine();
+engine.addCode(`
+  Set fso = CreateObject("Scripting.FileSystemObject")
+  If fso.FileExists("package.json") Then
+    MsgBox "Found package.json"
+  End If
+`);
+```
+
 ### P/Invoke (Win32 Native Bindings)
 
 **Import path:** `@devscholar/node-ps1-dotnet/pinvoke`

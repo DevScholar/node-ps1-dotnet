@@ -378,3 +378,22 @@ export function startApplication(app: any, window: any): void {
     doInitialize();
     getIpc()!.send({ action: 'InvokeDetached', targetId: app.__ref, methodName: 'Run', args: [{ __ref: window.__ref }] });
 }
+
+/**
+ * Creates a COM object by ProgID, mimicking the WSH/IE `ActiveXObject` constructor.
+ * Works as both a regular function call and a `new` expression.
+ *
+ * Requires Windows and the target COM server to be registered.
+ * This is an alternative to the `winax` npm package for environments where
+ * node-gyp is unavailable.
+ *
+ * @example
+ * import { ActiveXObject } from '@devscholar/node-ps1-dotnet';
+ * const shell = new ActiveXObject('WScript.Shell');
+ * shell.Run('notepad.exe');
+ */
+export function ActiveXObject(progId: string): any {
+    doInitialize();
+    const res = getIpc()!.send({ action: 'CreateCOMObject', progId } as any) as any;
+    return createProxy(res);
+}

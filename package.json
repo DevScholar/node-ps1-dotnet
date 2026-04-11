@@ -21,6 +21,10 @@
     "./internal": {
       "types": "./types/internal.d.ts",
       "default": "./dist/internal.js"
+    },
+    "./activex": {
+      "types": "./types/activex.d.ts",
+      "default": "./dist/activex.js"
     }
   },
   "types": "./types/index.d.ts",
