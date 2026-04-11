@@ -667,61 +667,51 @@ function createStreamDuplex(meta: any): Duplex {
     return duplex;
 }
 
-export function createProxyWithInlineProps(meta: any): any {
-    if (meta.type !== 'ref') return createProxy(meta);
-    return makeRefProxy(meta.id, meta.props || {}, meta.hasIndexer === true);
+export function createProxyWithInlineProps<T = any>(meta: any): T {
+    if (meta.type !== 'ref') return createProxy<T>(meta);
+    return makeRefProxy(meta.id, meta.props || {}, meta.hasIndexer === true) as T;
 }
 
-export function createProxy(meta: any): any {
+export function createProxy<T = any>(meta: any): T {
     const ipc = getIpc();
     if (!ipc) throw new Error('IPC not initialized');
 
     if (meta.type === 'error') throw new Error(meta.message || 'Unknown .NET error');
 
-    if (meta.type === 'primitive' || meta.type === 'null') return meta.value;
+    if (meta.type === 'primitive' || meta.type === 'null') return meta.value as T;
 
-    // BigInteger → JS bigint
-    if (meta.type === 'bigint') return BigInt(meta.value);
+    if (meta.type === 'bigint') return BigInt(meta.value) as T;
 
-    // DateTime/DateTimeOffset → JS Date  (node-api-dotnet: DateTime => Date)
-    if (meta.type === 'date') return new Date(meta.value);
+    if (meta.type === 'date') return new Date(meta.value) as T;
 
-    // IDictionary<K,V> → JS Map<K,V>  (node-api-dotnet: IDictionary<K,V> => Map<K,V>)
     if (meta.type === 'map') {
         const entries: [any, any][] = (meta.entries as any[][]).map(
             (pair: any[]) => [createProxy(pair[0]), createProxy(pair[1])] as [any, any]
         );
-        return new Map(entries);
+        return new Map(entries) as T;
     }
 
-    // ref/out return — node-api-dotnet style: { result, outParam1, outParam2, ... }
     if (meta.type === 'refout') {
         const out: Record<string, any> = { result: createProxy(meta.result) };
         const outs = meta.outs as Record<string, any>;
         for (const key of Object.keys(outs)) {
             out[key] = createProxy(outs[key]);
         }
-        return out;
+        return out as T;
     }
 
     if (meta.type === 'array') {
         const arr = meta.value;
         if (arr.length <= LARGE_ARRAY_THRESHOLD) {
-            return arr.map((item: any) => createProxy(item));
+            return arr.map((item: any) => createProxy(item)) as T;
         }
-        return createLazyArray(arr);
+        return createLazyArray(arr) as T;
     }
 
-    // System.IO.Stream → Node.js Duplex  (node-api-dotnet: Stream => StreamDuplex)
-    if (meta.type === 'stream') return createStreamDuplex(meta);
+    if (meta.type === 'stream') return createStreamDuplex(meta) as T;
 
     if (meta.type === 'task') {
-        // Return a proxy ref to the Task — do NOT auto-await here.
-        // Sync task.Wait() on the UI thread causes deadlocks for Tasks that need
-        // the dispatcher (e.g. WebView2 CreateAsync).  Let dotnet.awaitTask() handle
-        // awaiting via the async ContinueWith path instead.
-        // The proxy is thenable, so `await task` works naturally.
-        return makeRefProxy(meta.id, undefined, undefined, true);
+        return makeRefProxy(meta.id, undefined, undefined, true) as T;
     }
 
     if (meta.type === 'namespace') {
@@ -732,15 +722,15 @@ export function createProxy(meta: any): any {
                 if (typeof prop !== 'string') return undefined;
                 return dotnet._load(`${nsName}.${prop}`);
             }
-        });
+        }) as T;
     }
 
-    if (meta.type !== 'ref') return null;
+    if (meta.type !== 'ref') return null as T;
 
     const ck: 'list' | 'map' | 'enumerable' | undefined =
         (meta as any).collectionKind === 'list'       ? 'list' :
         (meta as any).collectionKind === 'map'        ? 'map' :
         (meta as any).collectionKind === 'enumerable' ? 'enumerable' :
         undefined;
-    return makeRefProxy(meta.id, undefined, meta.hasIndexer === true, false, ck);
+    return makeRefProxy(meta.id, undefined, meta.hasIndexer === true, false, ck) as T;
 }

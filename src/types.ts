@@ -1,4 +1,3 @@
-// src/types.ts
 export interface ProtocolResponse {
     type: string;
     value?: any;
@@ -21,3 +20,7 @@ export interface CommandRequest {
     action: string;
     [key: string]: any;
 }
+
+export type DotnetRef = { readonly __ref: string } & Record<string, any>;
+
+export type ConstructableDotnetRef = { readonly __ref: string; new (...args: any[]): DotnetRef } & Record<string, any>;
