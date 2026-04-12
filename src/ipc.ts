@@ -7,11 +7,13 @@ export class IpcSync {
     private readBuf = Buffer.allocUnsafe(64 * 1024);
     private readBufLen = 0;
     private pipeName: string;
-    // Track sync event nesting depth so we can buffer out-of-band poll responses.
-    // When a syncEvent is processed, nested IPC send() calls share the same pipe —
-    // a pending poll response would be read as a nested command response otherwise.
-    private syncEventDepth = 0;
-    private pollBuffer: any[] = [];
+    // Buffer for out-of-order responses: _reqId → response message.
+    // When readResponseForId("n-5") reads a response tagged "n-3" (because C# executed
+    // n-3 before n-5 while the WPF dispatcher fired a nested sync event), the response
+    // is parked here so readResponseForId("n-3") can pick it up on the next iteration.
+    private responseBuffer = new Map<string, any>();
+    // Monotonic counter for outgoing command IDs.
+    private nextId = 0;
 
     constructor(pipeName: string, private onEvent: (msg: ProtocolResponse) => any) {
         this.pipeName = pipeName;
@@ -35,17 +37,19 @@ export class IpcSync {
 
     send(cmd: CommandRequest): ProtocolResponse {
         if (this.exited) return { type: 'exit', message: '' } as any;
+        const id = `n-${this.nextId++}`;
+        (cmd as any)._reqId = id;
         fs.writeSync(this.fd, JSON.stringify(cmd) + '\n');
-        const response = this.readResponse();
-        return response;
+        return this.readResponseForId(id);
     }
 
-    private readResponse(): ProtocolResponse {
+    private readResponseForId(expectedId: string): ProtocolResponse {
         while (true) {
-            // After sync event handling completes, return buffered poll responses
-            // to the outer readResponse() that originally sent the Poll command.
-            if (this.pollBuffer.length > 0 && this.syncEventDepth === 0) {
-                return this.pollBuffer.shift() as ProtocolResponse;
+            // Fast path: a nested call already received and buffered our response.
+            if (this.responseBuffer.has(expectedId)) {
+                const resp = this.responseBuffer.get(expectedId)!;
+                this.responseBuffer.delete(expectedId);
+                return resp as ProtocolResponse;
             }
 
             const line = this.readLine();
@@ -57,40 +61,29 @@ export class IpcSync {
             let msg: any;
             try { msg = JSON.parse(line); } catch { continue; }
 
-            // If blocking marker, keep reading until actual result
-            if (msg.type === '__blocking__') {
-                while (true) {
-                    const resultLine = this.readLine();
-                    if (resultLine === null) {
-                        this.exited = true;
-                        return { type: 'exit', message: '' } as any;
-                    }
-                    if (!resultLine) continue;
-                    try { msg = JSON.parse(resultLine); } catch { continue; }
-                    if (msg.type !== '__blocking__') return msg as ProtocolResponse;
-                }
-            }
+            // Skip __blocking__ markers (legacy, no longer sent by C#)
+            if (msg.type === '__blocking__') continue;
 
             // Sync callback: C# is blocked waiting for our reply before it can continue.
-            // Call the JS handler synchronously, send the return value back, then keep
-            // reading for the original response to the command we sent.
+            // Nested IPC calls inside the handler may buffer our expected response while
+            // reading their own responses — we pick it up on the next loop iteration.
             if (msg.type === 'syncEvent') {
-                this.syncEventDepth++;
                 let result: any = null;
                 try { result = this.onEvent(msg); } catch {}
-                this.syncEventDepth--;
                 try {
-                    fs.writeSync(this.fd, JSON.stringify({ type: 'reply', result: result ?? null }) + '\n');
+                    const reply: any = { type: 'reply', result: result ?? null };
+                    if (msg._reqId) reply._reqId = msg._reqId;
+                    fs.writeSync(this.fd, JSON.stringify(reply) + '\n');
                 } catch {}
-                continue;
+                continue; // Loop back — responseBuffer may now hold our expected response
             }
 
-            // During sync event handling, nested IPC calls share this pipe.
-            // A pending poll response (from the outer send({action:'Poll'})) would
-            // be misread as the nested command's response. Buffer it so the outer
-            // readResponse() returns it after the sync event completes.
-            if (msg.type === 'poll' && this.syncEventDepth > 0) {
-                this.pollBuffer.push(msg);
+            // If this response belongs to a different pending call (out-of-order due to
+            // WPF Dispatcher pumping nested commands while we're still waiting for ours),
+            // park it in responseBuffer so the right readResponseForId() caller finds it.
+            const rid = msg._reqId as string | undefined;
+            if (rid && rid !== expectedId) {
+                this.responseBuffer.set(rid, msg);
                 continue;
             }
 

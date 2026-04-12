@@ -481,7 +481,7 @@ function makeRefProxy(id: string, inlineProps?: Record<string, any>, hasIndexer?
             // add_EventName: C# blocks the event handler thread until the JS callback
             // returns. The return value is forwarded back to the .NET event handler,
             // allowing synchronous influence on .NET behavior (e.g. e.Cancel = true).
-            // Nested IPC calls inside the callback are supported via RunProcessNestedCommands.
+            // Nested IPC calls inside the callback are supported via WaitForSpecificResponse.
             if (prop.startsWith('add_')) {
                 const eventName = prop.substring(4);
                 return (callback: Function) => {

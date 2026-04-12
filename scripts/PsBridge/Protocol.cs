@@ -1,9 +1,11 @@
 
 // scripts/PsBridge/Protocol.cs
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
@@ -238,58 +240,6 @@ public static class Protocol
             return new Dictionary<string, object> { { "type", "map" }, { "entries", entries } };
         }
 
-        // Common geometry structs → plain JS objects (avoid ref proxy + IPC round-trips for X/Y/Width/Height).
-        // Covers WPF (System.Windows.*) and WinForms/GDI+ (System.Drawing.*) types.
-        {
-            var fn = inputObject.GetType().FullName;
-            if (fn == "System.Windows.Point" || fn == "System.Drawing.PointF")
-            {
-                var x = inputObject.GetType().GetProperty("X").GetValue(inputObject, null);
-                var y = inputObject.GetType().GetProperty("Y").GetValue(inputObject, null);
-                var obj = new Dictionary<string, object> { { "X", x }, { "Y", y } };
-                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
-            }
-            if (fn == "System.Drawing.Point")
-            {
-                var x = inputObject.GetType().GetProperty("X").GetValue(inputObject, null);
-                var y = inputObject.GetType().GetProperty("Y").GetValue(inputObject, null);
-                var obj = new Dictionary<string, object> { { "X", x }, { "Y", y } };
-                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
-            }
-            if (fn == "System.Windows.Size" || fn == "System.Drawing.SizeF")
-            {
-                var w = inputObject.GetType().GetProperty("Width").GetValue(inputObject, null);
-                var h = inputObject.GetType().GetProperty("Height").GetValue(inputObject, null);
-                var obj = new Dictionary<string, object> { { "Width", w }, { "Height", h } };
-                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
-            }
-            if (fn == "System.Drawing.Size")
-            {
-                var w = inputObject.GetType().GetProperty("Width").GetValue(inputObject, null);
-                var h = inputObject.GetType().GetProperty("Height").GetValue(inputObject, null);
-                var obj = new Dictionary<string, object> { { "Width", w }, { "Height", h } };
-                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
-            }
-            if (fn == "System.Windows.Rect" || fn == "System.Drawing.RectangleF")
-            {
-                var x = inputObject.GetType().GetProperty("X").GetValue(inputObject, null);
-                var y = inputObject.GetType().GetProperty("Y").GetValue(inputObject, null);
-                var w = inputObject.GetType().GetProperty("Width").GetValue(inputObject, null);
-                var h = inputObject.GetType().GetProperty("Height").GetValue(inputObject, null);
-                var obj = new Dictionary<string, object> { { "X", x }, { "Y", y }, { "Width", w }, { "Height", h } };
-                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
-            }
-            if (fn == "System.Drawing.Rectangle")
-            {
-                var x = inputObject.GetType().GetProperty("X").GetValue(inputObject, null);
-                var y = inputObject.GetType().GetProperty("Y").GetValue(inputObject, null);
-                var w = inputObject.GetType().GetProperty("Width").GetValue(inputObject, null);
-                var h = inputObject.GetType().GetProperty("Height").GetValue(inputObject, null);
-                var obj = new Dictionary<string, object> { { "X", x }, { "Y", y }, { "Width", w }, { "Height", h } };
-                return new Dictionary<string, object> { { "type", "primitive" }, { "value", obj } };
-            }
-        }
-
         var objRefId = Guid.NewGuid().ToString();
         BridgeState.ObjectStore[objRefId] = inputObject;
 
@@ -395,7 +345,7 @@ public static class Protocol
                     Func<object, object, object, object, object> callback = (p1, p2, p3, p4) =>
                     {
                         var netCallbackArgs = new object[] { p1, p2, p3, p4 };
-                        
+
                         var validProtoArgs = new List<Dictionary<string, object>>();
                         foreach (var a in netCallbackArgs)
                         {
@@ -405,28 +355,27 @@ public static class Protocol
                             }
                         }
 
+                        var msgId = "e-" + Interlocked.Increment(ref Reflection._nextEventId);
+                        var responseBox = new BlockingCollection<Dictionary<string, object>>(1);
+                        BridgeState.PendingResponses[msgId] = responseBox;
+
                         var msg = new Dictionary<string, object>
                         {
-                            { "type", "event" },
+                            { "_reqId", msgId },
+                            { "type", "syncEvent" },
                             { "callbackId", cbId },
                             { "args", validProtoArgs }
                         };
-                        
-                        var json = SimpleJson.Serialize(msg);
-                        
-                        BridgeState.Writer.WriteLine(json);
-                        
-                        object result = null;
-                        try
+
+                        lock (BridgeState.Writer)
                         {
-                            if (PsHost.ProcessNestedCommands != null)
-                            {
-                                result = PsHost.ProcessNestedCommands();
-                            }
+                            BridgeState.Writer.WriteLine(SimpleJson.Serialize(msg));
                         }
-                        catch { }
-                        
-                        return result;
+
+                        var response = PsHost.WaitForSpecificResponse(msgId);
+                        if (response != null && response.ContainsKey("result"))
+                            return response["result"];
+                        return null;
                     };
                     
                     realArgs.Add(callback);

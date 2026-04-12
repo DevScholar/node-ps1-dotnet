@@ -1,6 +1,7 @@
 // scripts/PsBridge/BridgeState.cs
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipes;
 
@@ -25,11 +26,17 @@ public static class BridgeState
     // Key: deferralId → value: object[] { deferral, eventArgs, sender }
     public static ConcurrentDictionary<string, object[]> DeferralStore { get; private set; }
 
+    // Message-ID based response routing for sync events.
+    // Each FireSyncEventAndWait registers a one-item mailbox here keyed by message ID.
+    // The reader thread routes incoming {type:'reply', id:'...'} to the correct mailbox.
+    public static ConcurrentDictionary<string, BlockingCollection<Dictionary<string, object>>> PendingResponses { get; private set; }
+
     static BridgeState()
     {
         ObjectStore = new ConcurrentDictionary<string, object>();
         EventHandlerStore = new ConcurrentDictionary<string, Delegate>();
         EventQueue = new ConcurrentQueue<string>();
         DeferralStore = new ConcurrentDictionary<string, object[]>();
+        PendingResponses = new ConcurrentDictionary<string, BlockingCollection<Dictionary<string, object>>>();
     }
 }

@@ -64,10 +64,12 @@ public static partial class Reflection
                 }
 
                 // Pre-send appStart so Node.js can ref its proc and stay alive during Application.Run
-                var preResp = SimpleJson.Serialize(new Dictionary<string, object>
+                var preRespDict = new Dictionary<string, object>
                 {
                     { "type", "appStart" }
-                });
+                };
+                if (cmd.ContainsKey("_reqId")) preRespDict["_reqId"] = cmd["_reqId"];
+                var preResp = SimpleJson.Serialize(preRespDict);
                 lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(preResp); }
 
                 // Block here — SynchronizationContext.Post routes incoming commands to this message loop
@@ -125,10 +127,12 @@ public static partial class Reflection
                 var dialogCallbackId = Guid.NewGuid().ToString();
 
                 // Pre-send pending token — Node.js resumes its event loop for polling
-                var pendingResp = SimpleJson.Serialize(new Dictionary<string, object>
+                var pendingDict = new Dictionary<string, object>
                 {
                     { "type", "showDialogPending" }, { "callbackId", dialogCallbackId }
-                });
+                };
+                if (cmd.ContainsKey("_reqId")) pendingDict["_reqId"] = cmd["_reqId"];
+                var pendingResp = SimpleJson.Serialize(pendingDict);
                 lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(pendingResp); }
 
                 // ShowDialog runs a nested WPF dispatcher loop.
@@ -687,10 +691,12 @@ public static partial class Reflection
         }
 
         // Pre-send ok response BEFORE the blocking call
-        var preResponse = SimpleJson.Serialize(new Dictionary<string, object>
+        var preDict = new Dictionary<string, object>
         {
             { "type", "primitive" }, { "value", true }
-        });
+        };
+        if (cmd.ContainsKey("_reqId")) preDict["_reqId"] = cmd["_reqId"];
+        var preResponse = SimpleJson.Serialize(preDict);
         lock (BridgeState.Writer) { BridgeState.Writer.WriteLine(preResponse); }
 
         detachedMethod.Invoke(target, rawArgs);

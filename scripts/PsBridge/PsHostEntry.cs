@@ -13,8 +13,7 @@ public static class PsHostEntry
         CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
 
         BridgeState.PipeName = pipeName;
-        PsHost.ProcessNestedCommands = PsHost.RunProcessNestedCommands;
-        
+
         try
         {
             PsHost.StartServer();

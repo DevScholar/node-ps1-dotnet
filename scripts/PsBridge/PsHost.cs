@@ -10,10 +10,7 @@ using System.Web.Script.Serialization;
 
 public static class PsHost
 {
-    public static Func<object> ProcessNestedCommands { get; set; }
-
     public static BlockingCollection<Dictionary<string, object>> CommandQueue = new BlockingCollection<Dictionary<string, object>>();
-    public static BlockingCollection<Dictionary<string, object>> ReplyQueue = new BlockingCollection<Dictionary<string, object>>();
     public static SynchronizationContext MainSyncContext { get; set; }
 
     // Cached WPF Dispatcher reflection — lazily initialised by EnsureDispatcherReflection().
@@ -49,72 +46,45 @@ public static class PsHost
     }
 
     /// <summary>
-    /// Process all pending WPF Dispatcher messages (DoEvents pattern).
-    /// Pushes a DispatcherFrame that pumps Normal-priority and above messages,
-    /// then exits when the Background-priority callback fires.
+    /// Wait for a specific sync-event response by message ID.
+    /// Processes nested commands from the CommandQueue while waiting.
+    /// Uses blocking TakeFromAny — does NOT pump the WPF Dispatcher.
+    /// This prevents re-entrant events (e.g. nested MouseMove from Dispatcher.PushFrame)
+    /// that would cause coordinate drift. WebResourceRequested uses the deferred-event
+    /// path (EventQueue → Poll) and is not affected.
     /// </summary>
-    private static void PumpDispatcherMessages()
+    public static Dictionary<string, object> WaitForSpecificResponse(string msgId)
     {
-        if (_pushFrameMethod == null) return;
+        BlockingCollection<Dictionary<string, object>> responseBox;
+        if (!BridgeState.PendingResponses.TryGetValue(msgId, out responseBox))
+            return null;
 
-        var frame = Activator.CreateInstance(_frameType);
-        var dispatcher = _currentDispatcherProp.GetValue(null, null);
-        if (dispatcher == null) return;
-
-        Action exitAction = delegate { _frameContinueProp.SetValue(frame, false, null); };
-        _beginInvokeMethod.Invoke(dispatcher, new object[] { _backgroundPriority, exitAction });
-        _pushFrameMethod.Invoke(null, new object[] { frame });
-    }
-
-    public static object RunProcessNestedCommands()
-    {
-        EnsureDispatcherReflection();
-        bool hasDispatcher = (_pushFrameMethod != null);
-
-        var queues = new BlockingCollection<Dictionary<string, object>>[] { ReplyQueue, CommandQueue };
+        var queues = new BlockingCollection<Dictionary<string, object>>[] { responseBox, CommandQueue };
 
         while (BridgeState.PipeServer != null && BridgeState.PipeServer.IsConnected)
         {
             Dictionary<string, object> item;
             int index;
 
-            if (hasDispatcher)
-            {
-                // WPF mode: pump Dispatcher messages (allows WebResourceRequested to fire),
-                // then do a non-blocking check on the queues.
-                PumpDispatcherMessages();
-                index = BlockingCollection<Dictionary<string, object>>.TryTakeFromAny(queues, out item, 0);
-                if (index < 0)
-                {
-                    // Thread.Sleep(0) yields to equal-priority threads without sleeping
-                    // a full timer tick (~15ms). PumpDispatcherMessages() already provides
-                    // work per iteration, so true tight-spinning does not occur.
-                    Thread.Sleep(0);
-                    continue;
-                }
-            }
-            else
-            {
-                // Non-WPF (WinForms / console): original blocking wait.
-                index = BlockingCollection<Dictionary<string, object>>.TakeFromAny(queues, out item);
-            }
+            index = BlockingCollection<Dictionary<string, object>>.TakeFromAny(queues, out item);
 
             if (index == 0)
             {
-                if (item != null && item.ContainsKey("result"))
-                {
-                    return item["result"];
-                }
-                return null;
+                // Got our response — clean up and return
+                BlockingCollection<Dictionary<string, object>> removed;
+                BridgeState.PendingResponses.TryRemove(msgId, out removed);
+                return item;
             }
             else if (index == 1)
             {
                 if (item != null)
-                {
                     ExecuteCommand(item);
-                }
             }
         }
+
+        // Pipe disconnected — clean up
+        BlockingCollection<Dictionary<string, object>> orphan;
+        BridgeState.PendingResponses.TryRemove(msgId, out orphan);
         return null;
     }
 
@@ -129,7 +99,10 @@ public static class PsHost
     public static void ExecuteCommand(Dictionary<string, object> cmd)
     {
         if (cmd == null) return;
-        
+
+        // Extract command ID for response correlation
+        string cmdId = cmd.ContainsKey("_reqId") ? cmd["_reqId"].ToString() : null;
+
         try
         {
             var result = Reflection.InvokeReflectionLogic(cmd);
@@ -138,6 +111,9 @@ public static class PsHost
             // StartApplication pre-sends its own response and then blocks; skip the normal write.
             if (result != null && result.ContainsKey("__skipResponse"))
                 return;
+
+            // Echo command ID in response
+            if (cmdId != null) result["_reqId"] = cmdId;
 
             var json = SimpleJson.Serialize(result);
             lock (BridgeState.Writer)
@@ -149,11 +125,13 @@ public static class PsHost
         {
             UpdateSyncContext();
             var errMsg = ex.InnerException != null ? ex.InnerException.Message : ex.Message;
-            var errJson = SimpleJson.Serialize(new Dictionary<string, object>
+            var errDict = new Dictionary<string, object>
             {
                 { "type", "error" },
                 { "message", errMsg.Replace("\"", "'") }
-            });
+            };
+            if (cmdId != null) errDict["_reqId"] = cmdId;
+            var errJson = SimpleJson.Serialize(errDict);
             lock (BridgeState.Writer)
             {
                 BridgeState.Writer.WriteLine(errJson);
@@ -177,7 +155,7 @@ public static class PsHost
         // causing writes to block until the client reads — which deadlocks sync events.
         BridgeState.PipeServer = new NamedPipeServerStream(
             BridgeState.PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 65536, 65536);
-        
+
         BridgeState.PipeServer.WaitForConnection();
         var utf8Encoding = new System.Text.UTF8Encoding(false);
         BridgeState.Reader = new StreamReader(BridgeState.PipeServer, utf8Encoding);
@@ -198,9 +176,13 @@ public static class PsHost
                     var msg = ser.DeserializeObject(line) as Dictionary<string, object>;
                     if (msg == null) continue;
 
-                    if (msg.ContainsKey("type") && msg["type"].ToString() == "reply")
+                    // Route replies by message ID to the correct WaitForSpecificResponse caller
+                    if (msg.ContainsKey("type") && msg["type"].ToString() == "reply" && msg.ContainsKey("_reqId"))
                     {
-                        ReplyQueue.Add(msg);
+                        var replyId = msg["_reqId"].ToString();
+                        BlockingCollection<Dictionary<string, object>> box;
+                        if (BridgeState.PendingResponses.TryGetValue(replyId, out box))
+                            box.Add(msg);
                     }
                     else if (msg.ContainsKey("action") && msg["action"].ToString() == "Poll")
                     {
@@ -222,7 +204,11 @@ public static class PsHost
             finally
             {
                 CommandQueue.CompleteAdding();
-                ReplyQueue.CompleteAdding();
+                // Signal all pending sync-event waiters so they don't block forever
+                foreach (var kvp in BridgeState.PendingResponses)
+                {
+                    try { kvp.Value.CompleteAdding(); } catch { }
+                }
                 // After Application.Run() blocks the main thread, the foreach loop
                 // can't reach Environment.Exit(0). Force exit when pipe disconnects.
                 Environment.Exit(0);

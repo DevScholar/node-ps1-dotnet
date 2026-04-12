@@ -1,11 +1,16 @@
 // scripts/PsBridge/Reflection.Events.cs
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Threading;
 
 public static partial class Reflection
 {
+    // Monotonic counter for sync-event message IDs.
+    // Shared by FireSyncEventAndWait, HandleSetResolvingCallback, and Protocol.cs callback wrapper.
+    internal static int _nextEventId = 0;
     private static Dictionary<string, object> HandleRemoveEvent(Dictionary<string, object> cmd)
     {
         var targetId = cmd["targetId"].ToString();
@@ -88,8 +93,13 @@ public static partial class Reflection
             var protoArgs = new List<Dictionary<string, object>>();
             protoArgs.Add(new Dictionary<string, object> { { "type", "primitive" }, { "value", args.Name } });
 
+            var msgId = "e-" + Interlocked.Increment(ref _nextEventId);
+            var responseBox = new BlockingCollection<Dictionary<string, object>>(1);
+            BridgeState.PendingResponses[msgId] = responseBox;
+
             var msg = new Dictionary<string, object>
             {
+                { "_reqId", msgId },
                 { "type", "syncEvent" },
                 { "callbackId", cbId },
                 { "args", protoArgs }
@@ -99,8 +109,10 @@ public static partial class Reflection
                 BridgeState.Writer.WriteLine(SimpleJson.Serialize(msg));
             }
 
+            var response = PsHost.WaitForSpecificResponse(msgId);
             object result = null;
-            try { result = PsHost.RunProcessNestedCommands(); } catch { }
+            if (response != null && response.ContainsKey("result"))
+                result = response["result"];
 
             if (result is string)
             {
@@ -440,30 +452,30 @@ public static partial class Reflection
         BridgeState.EventQueue.Enqueue(msg);
     }
 
-    // Guard against re-entrant sync events. When RunProcessNestedCommands pumps
-    // the WPF dispatcher (PumpDispatcherMessages), it can fire new events (e.g.
-    // MouseMove) on the same thread. If those also use FireSyncEventAndWait, the
-    // inner event's syncEvent is written to the pipe before the outer event's
-    // nested IPC calls are answered, causing response ordering mixup on the
-    // Node.js side (the inner callback reads responses meant for the outer one).
-    // Fix: if already inside a sync event, fall back to async (EventQueue → Poll).
-    private static int _syncEventDepth = 0;
+    // Track which callbacks have an in-flight sync event.
+    // Prevents re-entrant fires of the same callback (e.g., nested MouseMove from
+    // WPF Dispatcher.PushFrame inside WaitForSpecificResponse) from creating stale
+    // coordinate overwrites when the outer (older) handlers unwind after the inner (newer) ones.
+    private static HashSet<string> _pendingSyncCallbacks = new HashSet<string>();
 
     // Fire a sync event to Node.js and block until the JS handler returns a value.
-    // C# is suspended in RunProcessNestedCommands(), processing any proxy calls the
-    // JS handler makes, until Node.js sends back {type:'reply', result:...}.
+    // Each event gets a unique message ID. The reader thread routes the reply by ID
+    // to the correct WaitForSpecificResponse caller — safe for reentrant/nested events.
+    // Re-entrant calls for the SAME callback are skipped (returns null immediately)
+    // to prevent stale data from overwriting fresh data during unwinding.
     private static object FireSyncEventAndWait(string cbId, object[] args)
     {
-        if (_syncEventDepth > 0)
-        {
-            // Re-entrant: convert to async to avoid response ordering corruption.
-            // The callback will run during the next Poll cycle (~8ms latency).
-            FireAsyncEvent(cbId, args);
+        // Skip re-entrant fires for the same callback.
+        if (_pendingSyncCallbacks.Contains(cbId))
             return null;
-        }
-        _syncEventDepth++;
+        _pendingSyncCallbacks.Add(cbId);
+
         try
         {
+        var msgId = "e-" + Interlocked.Increment(ref _nextEventId);
+        var responseBox = new BlockingCollection<Dictionary<string, object>>(1);
+        BridgeState.PendingResponses[msgId] = responseBox;
+
         var protoArgs = new List<Dictionary<string, object>>();
         foreach (var arg in args)
         {
@@ -533,6 +545,7 @@ public static partial class Reflection
         }
         var msg = new Dictionary<string, object>
         {
+            { "_reqId", msgId },
             { "type", "syncEvent" },
             { "callbackId", cbId },
             { "args", protoArgs }
@@ -541,7 +554,11 @@ public static partial class Reflection
         {
             BridgeState.Writer.WriteLine(SimpleJson.Serialize(msg));
         }
-        var result = PsHost.RunProcessNestedCommands();
+
+        var response = PsHost.WaitForSpecificResponse(msgId);
+        object result = null;
+        if (response != null && response.ContainsKey("result"))
+            result = response["result"];
 
         // If JS returned response data for WebResourceRequested, create the response in C#.
         // This avoids nested IPC calls which deadlock due to pipe FlushFileBuffers blocking.
@@ -574,11 +591,11 @@ public static partial class Reflection
                     var createRespMethod = env.GetType().GetMethod("CreateWebResourceResponse");
                     if (createRespMethod != null)
                     {
-                        var response = createRespMethod.Invoke(env, new object[] { (Stream)memStream, statusCode, reasonPhrase, headers });
+                        var webResponse = createRespMethod.Invoke(env, new object[] { (Stream)memStream, statusCode, reasonPhrase, headers });
                         var responseProp = arg.GetType().GetProperty("Response");
                         if (responseProp != null)
                         {
-                            responseProp.SetValue(arg, response, null);
+                            responseProp.SetValue(arg, webResponse, null);
                         }
                     }
                 }
@@ -594,7 +611,7 @@ public static partial class Reflection
         }
         finally
         {
-            _syncEventDepth--;
+            _pendingSyncCallbacks.Remove(cbId);
         }
     }
 
