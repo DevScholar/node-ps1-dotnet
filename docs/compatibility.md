@@ -26,7 +26,7 @@ APIs are divided into two tiers:
 | Tier | APIs | Stability |
 |------|------|-----------|
 | **Compatible** (mirrors node-api-dotnet) | `dotnet.load()`, type/namespace access, `new`, method/property calls, `frameworkMoniker`, `runtimeVersion`, `resolving` listener | Stable — changes track node-api-dotnet's own API |
-| **Proprietary extensions** (unique to this project) | `add_*` / `remove_*` events, `typeConversionBehavior`, `addType()`, Stream marshalling, P/Invoke decorators | **No stability guarantee** — may change between versions |
+| **Proprietary extensions** (unique to this project) | `add_*` / `remove_*` events, `typeConversionBehavior`, `addType()`, P/Invoke decorators | **No stability guarantee** — may change between versions |
 
 Proprietary extension APIs exist because node-api-dotnet has not yet implemented those features. When node-api-dotnet adds equivalent support, this project's API may be revised to match.
 
@@ -34,7 +34,7 @@ Proprietary extension APIs exist because node-api-dotnet has not yet implemented
 
 ## Type Conversion Reference
 
-The table below shows how each .NET type is marshalled to JavaScript.
+The table below shows how each .NET type is marshalled to JavaScript in the default (`'node-api-dotnet'`) mode.
 
 | .NET type | JS value | Notes |
 |-----------|----------|-------|
@@ -49,10 +49,9 @@ The table below shows how each .NET type is marshalled to JavaScript.
 | `BigInteger` | `bigint` | via `BigInt(decimalString)` |
 | `Tuple<A,B>` / `ValueTuple<A,B>` | `[A, B]` (array) | up to 8 elements |
 | `T[]` | `T[]` | value copy |
-| `IList<T>` / `List<T>` | `T[]` copy **or** ref proxy | see [Type Conversion Modes](#type-conversion-modes) |
-| `IEnumerable<T>` (not IList) | ref proxy + `Symbol.iterator` | lazy iterable; see below |
-| `IDictionary<K,V>` | `Map<K,V>` copy **or** ref proxy | see [Type Conversion Modes](#type-conversion-modes) |
-| `System.IO.Stream` | `stream.Duplex` | see [Stream Support](#stream-support) |
+| `IList<T>` / `List<T>` | `T[]` | value copy |
+| `IEnumerable<T>` (not IList) | ref proxy + `Symbol.iterator` | lazy iterable |
+| `IDictionary<K,V>` | `Map<K,V>` | value copy |
 | `Task<T>` | `Promise<T>` | via `await` / `dotnet.awaitTask()` |
 | ref/out params | `{ result, paramA, paramB }` | node-api-dotnet style |
 | class / interface instance | ref proxy | live .NET reference |
@@ -125,6 +124,8 @@ dotnet.addListener('resolving', (name: string) => {
 ---
 
 ## APIs Unique to This Project (Not in node-api-dotnet)
+
+> **Stability**: APIs in this section have **no stability guarantee** and may change between versions. They exist because node-api-dotnet has not yet implemented equivalent features; when it does, these APIs may be revised or removed to match.
 
 ### Event Subscription
 
@@ -199,6 +200,109 @@ engine.addCode(`
   End If
 `);
 ```
+
+### `typeConversionBehavior` — pythonnet Mode
+
+`node-ps1-dotnet` supports two collection marshalling strategies, switchable at runtime:
+
+```typescript
+dotnet.typeConversionBehavior = 'node-api-dotnet'; // default
+dotnet.typeConversionBehavior = 'pythonnet';
+```
+
+The setting takes effect immediately for all subsequent IPC calls.
+
+In **`'pythonnet'`** mode, inspired by [pythonnet](https://pythonnet.github.io/pythonnet/python.html)'s rule that reference types stay as references, collections are returned as live ref proxies rather than value copies:
+
+| .NET type | JS value | Mutable from JS? |
+|-----------|----------|-----------------|
+| `IList<T>` / `List<T>` | ref proxy + JS array interface | **Yes** — `Add`, `Remove`, `Clear` apply to the original object |
+| `IDictionary<K,V>` | ref proxy + JS Map interface | **Yes** — `set`, `delete`, `clear` apply to the original object |
+| `IEnumerable<T>` (not IList) | ref proxy + `Symbol.iterator` | Read-only (same as default mode) |
+
+#### IList proxy: JS array interface
+
+```typescript
+dotnet.typeConversionBehavior = 'pythonnet';
+
+const origins = nwwReg.AllowedOrigins; // ref proxy, not a copy
+
+// ── Mutation (applied to the real .NET IList<string>) ──
+origins.Add('*');           // ✅
+origins.Remove('old');      // ✅
+origins.Clear();            // ✅
+
+// ── JS array read interface (lowercase — never clashes with .NET PascalCase) ──
+origins.length;                      // ✅  → Count
+for (const o of origins) { ... }     // ✅  → Symbol.iterator
+[...origins];                        // ✅  → spread
+origins.map(o => o.toUpperCase());   // ✅
+origins.filter(o => o !== '*');      // ✅
+origins.find(o => o === '*');        // ✅
+origins.includes('*');               // ✅
+origins.indexOf('*');                // ✅
+origins.at(-1);                      // ✅  → last element
+origins.slice(0, 2);                 // ✅
+
+// ── .NET PascalCase members still work ──
+origins.Contains('*');    // ✅
+origins.Count;            // ✅
+```
+
+#### IDictionary proxy: JS Map interface
+
+```typescript
+dotnet.typeConversionBehavior = 'pythonnet';
+
+const headers = response.Headers; // ref proxy to Dictionary<string,string>
+
+// ── Mutation ──
+headers.set('X-Custom', 'value');   // ✅  → set_Item
+headers.delete('X-Unused');         // ✅  → Remove
+headers.clear();                    // ✅  → Clear
+
+// ── Read (JS Map interface) ──
+headers.get('Content-Type');        // ✅  → get_Item
+headers.has('Authorization');       // ✅  → ContainsKey
+headers.size;                       // ✅  → Count
+for (const [k, v] of headers) { }  // ✅  → Symbol.iterator (materialises snapshot)
+headers.keys();                     // ✅
+headers.values();                   // ✅
+headers.entries();                  // ✅
+headers.forEach((v, k) => { });     // ✅
+
+// ── .NET PascalCase members still work ──
+headers.Count;                  // ✅
+headers.ContainsKey('Accept');  // ✅
+```
+
+#### IEnumerable\<T\> proxy (both modes)
+
+Types that implement `IEnumerable<T>` but not `IList<T>` (e.g. `HashSet<T>`, `Queue<T>`, LINQ results) are always returned as ref proxies with a JS iterable interface:
+
+```typescript
+const set = obj.UniqueNames; // HashSet<string> → ref proxy
+
+for (const name of set) { ... }        // ✅  → Symbol.iterator
+[...set];                              // ✅
+set.map(n => n.toUpperCase());         // ✅  (materialises then maps)
+set.filter(n => n.length > 3);        // ✅
+set.includes('Alice');                 // ✅
+```
+
+> **Why no name clash?** .NET standard members use `PascalCase` (`Add`, `Count`, `Contains`, …) while the JS interfaces use `camelCase` (`map`, `filter`, `length`, `get`, `set`, …) — these two naming conventions never overlap.
+
+#### Performance note
+
+JS read methods (`map`, `filter`, `forEach`, etc.) on list/enumerable proxies materialise all items via IPC each time they are called. For large collections accessed in a tight loop, materialise once:
+
+```typescript
+const arr = [...list]; // one IPC snapshot
+arr.map(...)
+arr.filter(...)
+```
+
+---
 
 ### P/Invoke (Win32 Native Bindings)
 
@@ -309,156 +413,6 @@ User32.FlashWindowEx({ cbSize: 20, hwnd: handle, dwFlags: 3, uCount: 5, dwTimeou
 | `import` static types (TypeScript) | node-api-dotnet generates `.d.ts` via `.nupkg`; this project uses dynamic `Proxy` |
 | macOS / Linux | node-api-dotnet is cross-platform; this project is Windows only |
 | `Task<T>` native async/await | Wrapped as `Promise` via poll-based IPC; same semantics, additional round-trip overhead |
-
----
-
-## Type Conversion Modes
-
-`node-ps1-dotnet` supports two collection marshalling strategies, switchable at runtime:
-
-```typescript
-dotnet.typeConversionBehavior = 'node-api-dotnet'; // default
-dotnet.typeConversionBehavior = 'pythonnet';
-```
-
-The setting takes effect immediately for all subsequent IPC calls.
-
-### `'node-api-dotnet'` (default)
-
-| .NET type | JS value | Mutable from JS? |
-|-----------|----------|-----------------|
-| `IList<T>` / `List<T>` | `T[]` (value copy) | No — mutations are lost |
-| `IDictionary<K,V>` | `Map<K,V>` (value copy) | No — mutations are lost |
-| `IEnumerable<T>` (not IList) | ref proxy + `Symbol.iterator` | Read-only iteration |
-
-This is the default because it gives the most natural JS experience for read-only data.
-
-### `'pythonnet'` mode
-
-Inspired by [pythonnet](https://pythonnet.github.io/pythonnet/python.html)'s rule that reference types stay as references:
-
-| .NET type | JS value | Mutable from JS? |
-|-----------|----------|-----------------|
-| `IList<T>` / `List<T>` | ref proxy + JS array interface | **Yes** — `Add`, `Remove`, `Clear` apply to the original object |
-| `IDictionary<K,V>` | ref proxy + JS Map interface | **Yes** — `set`, `delete`, `clear` apply to the original object |
-| `IEnumerable<T>` (not IList) | ref proxy + `Symbol.iterator` | Read-only (same as default mode) |
-
-#### IList proxy: JS array interface
-
-```typescript
-dotnet.typeConversionBehavior = 'pythonnet';
-
-const origins = nwwReg.AllowedOrigins; // ref proxy, not a copy
-
-// ── Mutation (applied to the real .NET IList<string>) ──
-origins.Add('*');           // ✅
-origins.Remove('old');      // ✅
-origins.Clear();            // ✅
-
-// ── JS array read interface (lowercase — never clashes with .NET PascalCase) ──
-origins.length;                      // ✅  → Count
-for (const o of origins) { ... }     // ✅  → Symbol.iterator
-[...origins];                        // ✅  → spread
-origins.map(o => o.toUpperCase());   // ✅
-origins.filter(o => o !== '*');      // ✅
-origins.find(o => o === '*');        // ✅
-origins.includes('*');               // ✅
-origins.indexOf('*');                // ✅
-origins.at(-1);                      // ✅  → last element
-origins.slice(0, 2);                 // ✅
-
-// ── .NET PascalCase members still work ──
-origins.Contains('*');    // ✅
-origins.Count;            // ✅
-```
-
-#### IDictionary proxy: JS Map interface
-
-```typescript
-dotnet.typeConversionBehavior = 'pythonnet';
-
-const headers = response.Headers; // ref proxy to Dictionary<string,string>
-
-// ── Mutation ──
-headers.set('X-Custom', 'value');   // ✅  → set_Item
-headers.delete('X-Unused');         // ✅  → Remove
-headers.clear();                    // ✅  → Clear
-
-// ── Read (JS Map interface) ──
-headers.get('Content-Type');        // ✅  → get_Item
-headers.has('Authorization');       // ✅  → ContainsKey
-headers.size;                       // ✅  → Count
-for (const [k, v] of headers) { }  // ✅  → Symbol.iterator (materialises snapshot)
-headers.keys();                     // ✅
-headers.values();                   // ✅
-headers.entries();                  // ✅
-headers.forEach((v, k) => { });     // ✅
-
-// ── .NET PascalCase members still work ──
-headers.Count;                  // ✅
-headers.ContainsKey('Accept');  // ✅
-```
-
-#### IEnumerable\<T\> proxy (both modes)
-
-Types that implement `IEnumerable<T>` but not `IList<T>` (e.g. `HashSet<T>`, `Queue<T>`, LINQ results) are always returned as ref proxies with a JS iterable interface:
-
-```typescript
-const set = obj.UniqueNames; // HashSet<string> → ref proxy
-
-for (const name of set) { ... }        // ✅  → Symbol.iterator
-[...set];                              // ✅
-set.map(n => n.toUpperCase());         // ✅  (materialises then maps)
-set.filter(n => n.length > 3);        // ✅
-set.includes('Alice');                 // ✅
-```
-
-> **Why no name clash?** .NET standard members use `PascalCase` (`Add`, `Count`, `Contains`, …) while the JS interfaces use `camelCase` (`map`, `filter`, `length`, `get`, `set`, …) — these two naming conventions never overlap.
-
-#### Performance note
-
-JS read methods (`map`, `filter`, `forEach`, etc.) on list/enumerable proxies materialise all items via IPC each time they are called. For large collections accessed in a tight loop, materialise once:
-
-```typescript
-const arr = [...list]; // one IPC snapshot
-arr.map(...)
-arr.filter(...)
-```
-
----
-
-## Stream Support
-
-`System.IO.Stream` subclasses are automatically marshalled as Node.js `stream.Duplex` objects.
-
-```typescript
-const ms = new dotnet.System.IO.MemoryStream();
-
-// Write to the .NET stream via Node.js writable interface
-import { pipeline } from 'node:stream/promises';
-await pipeline(nodeReadable, ms);
-
-// Read from the .NET stream
-ms.seek(0);               // seek to beginning (available when canSeek=true)
-const chunks: Buffer[] = [];
-for await (const chunk of ms) chunks.push(chunk);
-const data = Buffer.concat(chunks);
-
-// Access .NET Stream properties directly via __ref
-console.log(ms.Length);  // ✅ — .NET property via ref proxy
-console.log(ms.Position);
-```
-
-**Properties on the returned Duplex:**
-
-| Property / method | Description |
-|-------------------|-------------|
-| `duplex.__ref` | The .NET object ref — use for direct .NET property/method access |
-| `duplex.seek(offset, origin?)` | Calls `Stream.Seek(offset, origin)` — only present when `canSeek=true` |
-
-**`origin` values for `seek`:** `0` = Begin (default), `1` = Current, `2` = End.
-
-> **Warning**: The Duplex `_read` implementation calls `Stream.Read()` synchronously over the IPC channel. This is fine for in-memory or local file streams. Avoid wrapping slow network streams — they will block the Node.js event loop until data arrives.
 
 ---
 
