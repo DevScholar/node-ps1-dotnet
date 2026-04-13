@@ -1,6 +1,6 @@
 {
   "name": "@devscholar/node-ps1-dotnet",
-  "version": "0.0.18",
+  "version": "0.0.19",
   "description": "Node.js to .NET interop via IPC focused on GUI support",
   "main": "./dist/index.js",
   "type": "module",
