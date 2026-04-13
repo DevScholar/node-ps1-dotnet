@@ -397,3 +397,29 @@ export function ActiveXObject(progId: string): any {
     const res = getIpc()!.send({ action: 'CreateCOMObject', progId } as any) as any;
     return createProxy(res);
 }
+
+/**
+ * Gets a reference to a COM object from a running instance or a file/moniker path,
+ * mimicking VBScript's `GetObject`.
+ *
+ * - `GetObject(undefined, "Excel.Application")` — get running instance (Marshal.GetActiveObject)
+ * - `GetObject("winmgmts:")` — bind to WMI moniker
+ * - `GetObject("C:\\file.xls")` — bind to file moniker
+ *
+ * Requires Windows and the target COM server to be registered.
+ *
+ * @example
+ * import { GetObject, Enumerator } from '@devscholar/node-ps1-dotnet/activex';
+ * const wmi = GetObject("winmgmts:");
+ * for (const os of Enumerator(wmi.ExecQuery("SELECT * FROM Win32_OperatingSystem"))) {
+ *     console.log(os.Caption);
+ * }
+ */
+export function GetObject(pathname?: string, cls?: string): any {
+    doInitialize();
+    const cmd: any = { action: 'GetCOMObject' };
+    if (pathname) cmd.pathname = pathname;
+    if (cls) cmd.cls = cls;
+    const res = getIpc()!.send(cmd) as any;
+    return createProxy(res);
+}

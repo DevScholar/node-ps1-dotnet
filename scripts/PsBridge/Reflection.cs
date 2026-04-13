@@ -22,6 +22,7 @@ public static partial class Reflection
             case "CompleteDeferral":      return HandleCompleteDeferral(cmd);
             case "New":                   return HandleNew(cmd);
             case "CreateCOMObject":       return HandleCreateCOMObject(cmd);
+            case "GetCOMObject":          return HandleGetCOMObject(cmd);
             case "Invoke":                return HandleInvoke(cmd);
             case "AwaitTask":             return HandleAwaitTask(cmd);
             case "LoadAssembly":          return HandleLoadAssembly(cmd);

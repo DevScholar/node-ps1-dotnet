@@ -34,6 +34,33 @@ public static partial class Reflection
         }
     }
 
+    private static Dictionary<string, object> HandleGetCOMObject(Dictionary<string, object> cmd)
+    {
+        var pathname = cmd.ContainsKey("pathname") ? cmd["pathname"].ToString() : "";
+        var cls = cmd.ContainsKey("cls") ? cmd["cls"].ToString() : "";
+        try
+        {
+            object obj;
+            if (pathname == "")
+            {
+                // GetObject(, "ProgID") — get running instance via Marshal.GetActiveObject
+                if (cls == "")
+                    throw new Exception("GetObject: must provide either pathname or class");
+                obj = System.Runtime.InteropServices.Marshal.GetActiveObject(cls);
+            }
+            else
+            {
+                // GetObject("winmgmts:") or GetObject("C:\file.xls") — bind to moniker
+                obj = System.Runtime.InteropServices.Marshal.BindToMoniker(pathname);
+            }
+            return Protocol.ConvertToProtocol(obj);
+        }
+        catch (Exception ex)
+        {
+            throw new Exception("GetCOMObject Error: " + ex.Message);
+        }
+    }
+
     private static Dictionary<string, object> HandleNew(Dictionary<string, object> cmd)
     {
         var type = (Type)BridgeState.ObjectStore[cmd["typeId"].ToString()];

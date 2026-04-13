@@ -14,7 +14,7 @@
  * @module
  */
 
-import { ActiveXObject as _ActiveXObject } from './index.js';
+import { ActiveXObject as _ActiveXObject, GetObject as _GetObject } from './index.js';
 import { getIpc } from './state.js';
 import { createProxy } from './proxy.js';
 
@@ -48,3 +48,13 @@ export function Enumerator(collection: any): any[] {
     if (res.type === 'array') return (res.value as any[]).map((item: any) => createProxy(item));
     return [];
 }
+
+/**
+ * Gets a reference to a COM object from a running instance or a file/moniker path,
+ * mimicking VBScript's `GetObject`.
+ *
+ * - `GetObject(undefined, "Excel.Application")` — get running instance (Marshal.GetActiveObject)
+ * - `GetObject("winmgmts:")` — bind to WMI moniker string
+ * - `GetObject("C:\\file.xls")` — bind to file moniker
+ */
+export const GetObject: (pathname?: string, cls?: string) => any = _GetObject;
