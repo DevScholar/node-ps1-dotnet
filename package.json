@@ -46,6 +46,7 @@
     "bun",
     "gui"
   ],
+  "os": ["win32"],
   "author": "",
   "license": "MIT",
   "devDependencies": {
