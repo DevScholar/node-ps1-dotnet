@@ -1,6 +1,7 @@
 import { getIpc } from './state.js';
 import { randomUUID } from 'node:crypto';
 import { Duplex } from 'node:stream';
+import { hresultToDescription } from './com-errors.js';
 
 export let node_ps1_dotnetGetter: (() => any) | null = null;
 
@@ -705,7 +706,8 @@ export function createProxy<T = any>(meta: any): T {
     if (!ipc) throw new Error('IPC not initialized');
 
     if (meta.type === 'error') {
-        const err = new Error(meta.message || 'Unknown .NET error');
+        const rawMessage = meta.message || 'Unknown .NET error';
+        const err = new Error(rawMessage);
         // The C# bridge recovers the COM HRESULT before it is flattened into a message string.
         // Attach it so a host (e.g. a VBScript engine) can surface the real error number
         // rather than guessing at a generic automation error.
@@ -714,6 +716,13 @@ export function createProxy<T = any>(meta: any): T {
             // intact (0x800A0035 stays -2146828235) rather than unsigned-shifting.
             (err as any).hresult = meta.hresult;
             (err as any).number = meta.hresult;
+            // Present a clean, IE/WSH-shaped description: for a known FACILITY_VBS code that
+            // is the canonical message ("File not found", "Path not found", ...) instead of
+            // the raw reflection text ("Invoke Error (X): Exception from HRESULT: 0x800A...")
+            // that the C# invoke helper would otherwise leak into `.message`.
+            const description = hresultToDescription(meta.hresult) ?? rawMessage;
+            err.message = description;
+            (err as any).description = description;
         }
         throw err;
     }
