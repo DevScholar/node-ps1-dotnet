@@ -30,7 +30,7 @@ public static partial class Reflection
         }
         catch (Exception ex)
         {
-            throw new Exception("CreateCOMObject Error: " + ex.Message);
+            throw WrapError("CreateCOMObject Error: ", ex);
         }
     }
 
@@ -57,7 +57,7 @@ public static partial class Reflection
         }
         catch (Exception ex)
         {
-            throw new Exception("GetCOMObject Error: " + ex.Message);
+            throw WrapError("GetCOMObject Error: ", ex);
         }
     }
 
@@ -227,7 +227,7 @@ public static partial class Reflection
         }
         catch (Exception ex)
         {
-            throw new Exception("New Error: " + ex.Message);
+            throw WrapError("New Error: ", ex);
         }
 
         return Protocol.ConvertToProtocol(obj);

@@ -704,7 +704,19 @@ export function createProxy<T = any>(meta: any): T {
     const ipc = getIpc();
     if (!ipc) throw new Error('IPC not initialized');
 
-    if (meta.type === 'error') throw new Error(meta.message || 'Unknown .NET error');
+    if (meta.type === 'error') {
+        const err = new Error(meta.message || 'Unknown .NET error');
+        // The C# bridge recovers the COM HRESULT before it is flattened into a message string.
+        // Attach it so a host (e.g. a VBScript engine) can surface the real error number
+        // rather than guessing at a generic automation error.
+        if (typeof meta.hresult === 'number') {
+            // HRESULT is a 32-bit signed value; JS stores it as a signed number. Keep it
+            // intact (0x800A0035 stays -2146828235) rather than unsigned-shifting.
+            (err as any).hresult = meta.hresult;
+            (err as any).number = meta.hresult;
+        }
+        throw err;
+    }
 
     if (meta.type === 'primitive' || meta.type === 'null') return meta.value as T;
 

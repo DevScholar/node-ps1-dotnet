@@ -289,7 +289,7 @@ public static partial class Reflection
                 }
                 catch (Exception ex)
                 {
-                    throw new Exception("Set Property Error '" + name + "': " + ex.Message);
+                    throw WrapError("Set Property Error '" + name + "': ", ex);
                 }
             }
         }
@@ -557,8 +557,7 @@ public static partial class Reflection
                 }
                 catch { }
             }
-            var innerMsg = ex.InnerException != null ? ex.InnerException.Message : ex.Message;
-            throw new Exception("Invoke Error (" + name + "): " + innerMsg);
+            throw WrapError("Invoke Error (" + name + "): ", ex);
         }
     }
 
@@ -651,8 +650,7 @@ public static partial class Reflection
         }
         catch (AggregateException ae)
         {
-            var innerMsg = ae.InnerException != null ? ae.InnerException.Message : ae.ToString();
-            throw new Exception("Task Error: " + innerMsg);
+            throw WrapError("Task Error: ", ae);
         }
     }
 
@@ -958,8 +956,7 @@ public static partial class Reflection
         }
         catch (TargetInvocationException ex)
         {
-            var inner = ex.InnerException != null ? ex.InnerException.Message : ex.Message;
-            throw new Exception("Invoke Error (" + name + "): " + inner);
+            throw WrapError("Invoke Error (" + name + "): ", ex);
         }
 
         // Collect ref/out output values

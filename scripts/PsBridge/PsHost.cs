@@ -130,6 +130,9 @@ public static class PsHost
                 { "type", "error" },
                 { "message", errMsg.Replace("\"", "'") }
             };
+            int hresult = Reflection.FindComHResult(ex);
+            if (hresult != 0)
+                errDict["hresult"] = hresult;
             if (cmdId != null) errDict["_reqId"] = cmdId;
             var errJson = SimpleJson.Serialize(errDict);
             lock (BridgeState.Writer)
