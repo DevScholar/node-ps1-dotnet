@@ -28,25 +28,83 @@ export const ActiveXObject: {
 } = _ActiveXObject as any;
 
 /**
- * Materializes a COM collection into a JS array, enabling iteration.
- * Use this when a COM object exposes `_NewEnum` / `IEnumVARIANT` for enumeration.
+ * JScript-compatible Enumerator for COM collections that expose `_NewEnum` /
+ * `IEnumVARIANT`. Mirrors the Microsoft JScript host object of the same name, so
+ * legacy JScript cursor patterns keep working unchanged:
+ *
+ *   var e = new Enumerator(coll);
+ *   e.moveFirst();
+ *   while (!e.atEnd()) {
+ *       WScript.Echo(e.item());
+ *       e.moveNext();
+ *   }
+ *
+ * The instance is also ES6-iterable (`Symbol.iterator`), so `for...of` and spread
+ * work on it without giving up the classic cursor API.
  *
  * @example
  * import { ActiveXObject, Enumerator } from '@devscholar/node-ps1-dotnet/activex';
  * const fso = new ActiveXObject('Scripting.FileSystemObject');
  * const files = fso.GetFolder('.').Files;
- * for (const file of Enumerator(files)) {
+ * for (const file of new Enumerator(files)) {
  *     console.log(file.Name);
  * }
  */
-export function Enumerator(collection: any): any[] {
-    const ipc = getIpc();
-    if (!ipc) throw new Error('IPC not initialized');
-    const targetId = collection?.__ref;
-    if (!targetId) throw new Error('Enumerator: expected a .NET/COM object proxy');
-    const res = ipc.send({ action: 'MaterializeEnum', targetId } as any) as any;
-    if (res.type === 'array') return (res.value as any[]).map((item: any) => createProxy(item));
-    return [];
+export class Enumerator implements Iterable<any> {
+    private readonly _items: any[];
+    private _pos: number;
+
+    constructor(collection: any) {
+        const ipc = getIpc();
+        if (!ipc) throw new Error('IPC not initialized');
+        const targetId = collection?.__ref;
+        if (!targetId) throw new Error('Enumerator: expected a .NET/COM object proxy');
+        const res = ipc.send({ action: 'MaterializeEnum', targetId } as any) as any;
+        this._items =
+            res.type === 'array' ? (res.value as any[]).map((item: any) => createProxy(item)) : [];
+        // A fresh JScript Enumerator points before the first item, so atEnd() is true
+        // until moveFirst() (or moveNext()) lands on a real item.
+        this._pos = -1;
+    }
+
+    /** True when positioned before the first item or after the last item. */
+    atEnd(): boolean {
+        return this._pos < 0 || this._pos >= this._items.length;
+    }
+
+    /** Returns the current item; throws when positioned at the beginning or end. */
+    item(): any {
+        if (this.atEnd()) {
+            throw new Error('Enumerator is positioned before the first item or after the last item');
+        }
+        return this._items[this._pos];
+    }
+
+    /** Moves to the first item (past-the-end position if the collection is empty). */
+    moveFirst(): void {
+        this._pos = 0;
+    }
+
+    /** Advances to the next item, or to the past-the-end position. */
+    moveNext(): void {
+        if (this._pos < this._items.length) {
+            this._pos++;
+        }
+    }
+
+    /** ES6 iteration over the materialized items, independent of the cursor. */
+    [Symbol.iterator](): Iterator<any> {
+        let i = 0;
+        const items = this._items;
+        return {
+            next(): IteratorResult<any> {
+                if (i < items.length) {
+                    return { value: items[i++], done: false };
+                }
+                return { value: undefined, done: true };
+            },
+        };
+    }
 }
 
 /**

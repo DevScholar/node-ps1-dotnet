@@ -411,7 +411,7 @@ export function ActiveXObject(progId: string): any {
  * @example
  * import { GetObject, Enumerator } from '@devscholar/node-ps1-dotnet/activex';
  * const wmi = GetObject("winmgmts:");
- * for (const os of Enumerator(wmi.ExecQuery("SELECT * FROM Win32_OperatingSystem"))) {
+ * for (const os of new Enumerator(wmi.ExecQuery("SELECT * FROM Win32_OperatingSystem"))) {
  *     console.log(os.Caption);
  * }
  */
